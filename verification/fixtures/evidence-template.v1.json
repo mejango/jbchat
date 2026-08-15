@@ -1,0 +1,3609 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_kind": "template",
+  "generated_at": "2026-01-01T00:05:00Z",
+  "evidence_as_of": "2026-01-01T00:05:00Z",
+  "policy": {
+    "verification_spec_digest": "sha256:df4c8afbae189a209014b2984443c26c20818645f00c12717e49977c43c4d8e1",
+    "launch_gates_digest": "sha256:5978258b16badd6ff62f72a489a1f4b03f86f9096223ef4d3c261ffaf28e5465",
+    "requirement_catalog_digest": "sha256:8aef685208b52a1152b5bc8fc34eb37cce6b353ca1d605c7ad3f60ea008acef1",
+    "evidence_schema_digest": "sha256:49c4568fc38fc907b301a092fd5d4f72c22046df510ef1c462f7e01c9f9d4cff",
+    "evidence_checker_digest": "sha256:a4bf0f74a57110a0b244da44f068266d1e06cf1948388c44c722a395a3d56658"
+  },
+  "promotion": {
+    "requested": false,
+    "target_gate": "G0",
+    "approval_subject_digest": null,
+    "scope": {
+      "chains": [],
+      "clients": [],
+      "wallet_methods": [],
+      "embed_hosts": [],
+      "recovery_modes": [],
+      "attachment_types": [],
+      "connectors": [],
+      "capabilities": []
+    }
+  },
+  "release": {
+    "source_commit": "0123456789abcdef0123456789abcdef01234567",
+    "primary_artifact_id": "fixture-build-artifact",
+    "dependency_lock_artifact_id": "fixture-dependency-lock",
+    "sbom_artifact_id": "fixture-sbom",
+    "build_provenance_artifact_id": "fixture-build-provenance",
+    "artifacts": [
+      {
+        "artifact_id": "fixture-build-artifact",
+        "kind": "build",
+        "path": "non-promotable-build.txt",
+        "digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+        "size_bytes": 98,
+        "media_type": "text/plain",
+        "evidence_ids": [],
+        "subject_artifact_id": null,
+        "subject_artifact_digest": null
+      },
+      {
+        "artifact_id": "fixture-dependency-lock",
+        "kind": "dependency_lock",
+        "path": "dependency-lock.fixture.json",
+        "digest": "sha256:abad39ea1193ba0a1c27557b07ebccf0e9ad69dc485c815c72fff33510304c1a",
+        "size_bytes": 124,
+        "media_type": "application/json",
+        "evidence_ids": [],
+        "subject_artifact_id": "fixture-build-artifact",
+        "subject_artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e"
+      },
+      {
+        "artifact_id": "fixture-sbom",
+        "kind": "sbom",
+        "path": "sbom.fixture.json",
+        "digest": "sha256:87c8eec2546d7427b45fe5e1f3c81462b3e4c5dfbe381f2ab385c82ccbb04101",
+        "size_bytes": 113,
+        "media_type": "application/json",
+        "evidence_ids": [],
+        "subject_artifact_id": "fixture-build-artifact",
+        "subject_artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e"
+      },
+      {
+        "artifact_id": "fixture-build-provenance",
+        "kind": "build_provenance",
+        "path": "build-provenance.fixture.json",
+        "digest": "sha256:c340c6336c9bb6851031a5894a3ef5096f9fe3c1bcba78b769fc1060c810d6b7",
+        "size_bytes": 125,
+        "media_type": "application/json",
+        "evidence_ids": [],
+        "subject_artifact_id": "fixture-build-artifact",
+        "subject_artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e"
+      }
+    ],
+    "build": {
+      "command": "fixture-only-no-build-was-run",
+      "environment_id": "fixture-environment-v1",
+      "started_at": "2026-01-01T00:00:00Z",
+      "completed_at": "2026-01-01T00:01:00Z",
+      "deterministic_seed": null
+    },
+    "toolchain": {
+      "node": "fixture-node-version-not-evidence",
+      "package_manager": "fixture-package-manager-version-not-evidence",
+      "compiler": "fixture-compiler-version-not-evidence",
+      "platforms": [
+        "fixture-platform-not-evidence"
+      ]
+    }
+  },
+  "revisions": {
+    "protocol": "fixture-protocol-revision-not-evidence",
+    "schema": "fixture-schema-revision-not-evidence",
+    "abi": "fixture-abi-revision-not-evidence",
+    "deployment_manifest": "fixture-deployment-revision-not-evidence",
+    "chain_policy": "fixture-chain-policy-revision-not-evidence",
+    "feature_flags": "fixture-feature-flags-revision-not-evidence"
+  },
+  "environment": {
+    "environment_id": "fixture-environment-v1",
+    "kind": "fixture",
+    "description": "Deterministic contract fixture only; no release or verification execution occurred."
+  },
+  "approvals": [],
+  "exceptions": [],
+  "traceability": [
+    {
+      "requirement_id": "INV-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "INV-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-security-engineering",
+        "display_name": "Messaging security engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-security-assurance",
+        "display_name": "Independent security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "CRY-14",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-cryptography-engineering",
+        "display_name": "Messaging cryptography engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-cryptography-assurance",
+        "display_name": "Independent cryptography assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-14",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-15",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-16",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRO-17",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-protocol-engineering",
+        "display_name": "Messaging protocol engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-protocol-assurance",
+        "display_name": "Independent protocol assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-14",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-15",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ID-16",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-identity-engineering",
+        "display_name": "Messaging identity engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-identity-assurance",
+        "display_name": "Independent identity assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-14",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-15",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "ENT-16",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-entitlement-engineering",
+        "display_name": "Messaging entitlement engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-chain-assurance",
+        "display_name": "Independent chain assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PRIV-14",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-privacy-engineering",
+        "display_name": "Messaging privacy engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-privacy-assurance",
+        "display_name": "Independent privacy assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "EMB-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-embed-engineering",
+        "display_name": "Messaging embed engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-web-security-assurance",
+        "display_name": "Independent web security assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "UX-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-product-accessibility",
+        "display_name": "Messaging product accessibility"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-accessibility-assurance",
+        "display_name": "Independent accessibility assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "DATA-14",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-data-engineering",
+        "display_name": "Messaging data engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-data-assurance",
+        "display_name": "Independent data assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-11",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-12",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-13",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-14",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-15",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "OPS-16",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-site-reliability",
+        "display_name": "Messaging site reliability"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-operations-assurance",
+        "display_name": "Independent operations assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-01",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-02",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-03",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-04",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-05",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-06",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-07",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-08",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-09",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    },
+    {
+      "requirement_id": "PLAT-10",
+      "applicability": "applicable",
+      "applicability_justification": "Template row only; no verification execution or result is asserted.",
+      "automated_test_ids": [],
+      "manual_evidence_ids": [],
+      "environment_id": "fixture-environment-v1",
+      "artifact_id": "fixture-build-artifact",
+      "artifact_digest": "sha256:51e89fb44bb7e9aefbc84295ca84ad885ee84d48b304de01e446ea567bc8852e",
+      "evidence_artifact_ids": [],
+      "owner": {
+        "subject": "team:messaging-platform-engineering",
+        "display_name": "Messaging platform engineering"
+      },
+      "independent_reviewer": {
+        "subject": "team:independent-platform-assurance",
+        "display_name": "Independent platform assurance"
+      },
+      "result": "not_run",
+      "completed_at": null,
+      "evidence_expires_at": null,
+      "unreachability_proof": null
+    }
+  ]
+}

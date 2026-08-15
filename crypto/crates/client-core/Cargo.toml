@@ -1,0 +1,18 @@
+[package]
+name = "juicebox-messaging-client-core"
+version = "0.0.0-pre-g1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+openmls.workspace = true
+openmls_traits.workspace = true
+openmls_rust_crypto.workspace = true
+openmls_basic_credential.workspace = true
+tls_codec.workspace = true
+
+[lints]
+workspace = true
+

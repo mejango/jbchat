@@ -1,0 +1,17 @@
+[package]
+name = "juicebox-messaging-mls-lab-store"
+version = "0.0.0-pre-g1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+juicebox-messaging-client-core = { path = "../client-core" }
+openmls.workspace = true
+openmls_memory_storage.workspace = true
+openmls_traits.workspace = true
+
+[lints]
+workspace = true
+

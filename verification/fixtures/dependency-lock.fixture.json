@@ -1,0 +1,5 @@
+{
+  "fixture": true,
+  "promotable": false,
+  "purpose": "Demonstrate a digest-bound dependency-lock artifact reference."
+}
