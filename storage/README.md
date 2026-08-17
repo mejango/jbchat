@@ -11,6 +11,21 @@ into real, checksummed, monotonically numbered PostgreSQL migrations.
 - `migrations/0003_conversation_plan_members.sql` normalizes plan rosters into
   relational members with the creator/welcome shape, plan-bound KeyPackage
   takes, and the composite deferred exactly-one-creator constraint.
+- `migrations/0004_envelope_and_witness_integrity.sql` binds envelope class to
+  its exact MLS content type, enforces the per-class transcript-hash shape,
+  the 64-byte Ed25519 delivery signature, the canonical-millisecond
+  `received_at`, and witness receipt identity against
+  `(conversation_id, position, head_hash)`.
+- `migrations/0005_delivery_log_signing_keys.sql` adds the active/retired
+  delivery signing-key registry with a foreign key from every checkpoint.
+- `migrations/0006_welcome_commit_binding.sql` binds every Welcome to the
+  exact Commit envelope identity and the `mls_commit` class.
+- `migrations/0007_archived_release_profiles.sql` adds the immutable archived
+  release-profile/DeliveryLimits registry with digest/trust-root foreign keys
+  from plans and conversation generations.
+- `migrations/0008_membership_purpose_role_matrix.sql` makes delivery purpose
+  immutable and enforces the purpose-to-role membership matrix, including
+  read-only `subscriber`.
 
 `npm run storage:migrate` applies pending migrations to the exact database in
 `JBM_STORAGE_DATABASE_URL`; it never infers a target, refuses checksum drift,
@@ -26,11 +41,10 @@ PostgreSQL 14 or newer installed locally and is intentionally not part of
 ## Boundary
 
 Passing the storage lab is necessary but not sufficient G2 evidence. Still
-open, per the specification's own gate language: the remaining section-1
-blocker constraints (envelope class/content-type and transcript-hash shape
-probes, witness receipt identity, Welcome/Commit binding, signing-key registry
-coverage under writes, archived release-profile registry use, replay/fence
-invisibility, historical page-end projections, policy-head set anchors, and
-authoritative scope mappings), the production repository that implements
-`AtomicDeliveryPersistencePort` against this schema, migration tests under
-concurrent writes, the section-11.2 restore drill, and replica failover.
+open, per the specification's own gate language: the pending-intent/signing-
+fence tables and replay/acceptance linkage (their shape belongs to the
+production repository that implements `AtomicDeliveryPersistencePort`),
+historical page-end projections and policy-transition range evidence,
+policy-head set/send-grant/quota anchors with deferred completeness
+assertions, authoritative realm/project/tenant/quota-scope mappings with
+signed provenance, the section-11.2 restore drill, and replica failover.

@@ -26,10 +26,16 @@ codeable item.
       checksummed advisory-locked runner (`npm run storage:migrate`), and a
       throwaway-cluster lab (`npm run test:storage`, 8 probes green on PG14).
       Kept out of `npm run check` so it stays offline/database-free.
-- [ ] Unit 2: remaining section-1 blocker probes (envelope class/content-type,
-      transcript-hash shape, witness receipt identity, Welcome/Commit binding,
-      signing-key registry, replay/fence invisibility, page-end projections,
-      policy-head anchors, scope mappings) + concurrent-write tests
+- [x] Unit 2: migrations 0004-0008 (envelope class/content-type +
+      transcript-hash shape + 64-byte signature + ms-canonical received_at,
+      witness head-hash identity, delivery signing-key registry,
+      Welcome/Commit class binding, immutable release-profile registry,
+      purpose-to-role matrix + immutable purpose) with 11 new probes incl.
+      concurrent position-fencing and concurrent migration runners (19 total).
+      Deferred to the repository unit: pending-intent/fence tables, replay
+      identity, page-end projections, policy-head/quota anchors, scope
+      mappings (their shape follows the TS port contract). `postgres`
+      (porsager) approved as the driver.
 - [ ] Unit 3: production repository implementing AtomicDeliveryPersistencePort
       against this schema (driver selection is a supply-chain decision to flag)
 - [ ] Unit 4: section-11.2 restore drill + failover evidence (operational)

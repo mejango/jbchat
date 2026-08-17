@@ -91,6 +91,18 @@ INSERT INTO project_refs (
 );
 INSERT INTO accounts (account_id, status, created_at)
 VALUES ('00000000-0000-4000-8000-000000000003', 'active', now());
+INSERT INTO archived_release_profiles (
+  release_profile_id, delivery_limits_digest, release_trust_root_digest,
+  delivery_limits_canonical, created_at
+) VALUES (
+  'fictional-release.v1', ${HEX32("51")}, ${HEX32("52")}, '{}'::jsonb, now()
+);
+INSERT INTO delivery_log_signing_keys (
+  key_id, public_key, state, valid_from, valid_until, created_at
+) VALUES (
+  'fictional-delivery-lab-2026q3', ${HEX32("81")}, 'active',
+  now() - interval '1 day', now() + interval '30 days', now()
+);
 INSERT INTO installations (
   installation_id, account_id, platform, storage_partition_class,
   installation_auth_profile, installation_auth_public_jwk, installation_auth_jkt, mls_credential_profile,
@@ -122,6 +134,126 @@ INSERT INTO conversation_plans (
 );
 ${memberRows}
 COMMIT;`;
+}
+
+const CONVERSATION_FIXTURE_SQL = `
+INSERT INTO conversations (
+  conversation_id, project_ref_id, kind, delivery_purpose, generation, state,
+  group_id_hash, release_profile_id, delivery_limits_digest,
+  release_trust_root_digest, quota_policy_digest, epoch, roster_version,
+  roster_hash, external_senders_hash, reader_history_retention_policy_hash,
+  confirmed_transcript_hash, current_policy_head_hash, current_log_head_hash,
+  retention_policy_version, retention_policy, created_at, last_activity_at,
+  expires_at
+) VALUES (
+  '00000000-0000-4000-8000-000000000301', '00000000-0000-4000-8000-000000000002',
+  'community_room', 'community', 1, 'active',
+  ${HEX32("91")}, 'fictional-release.v1', ${HEX32("51")}, ${HEX32("52")},
+  ${HEX32("53")}, 0, 0, ${HEX32("92")}, ${HEX32("93")}, ${HEX32("94")},
+  ${HEX32("95")}, ${HEX32("96")}, ${HEX32("97")},
+  1, '{}'::jsonb, now(), now(), now() + interval '30 days'
+);
+`;
+
+function envelopeInsert({
+  position = "2",
+  envelopeId = "00000000-0000-4000-8000-000000000402",
+  headByte = "a2",
+  contentType = "application/vnd.juicebox.messaging.mls-private-message",
+  transcripts = "NULL, NULL",
+  signature = "decode(repeat('99', 64), 'hex')",
+  receivedAt = "date_trunc('milliseconds', now())",
+  signingKeyId = "fictional-delivery-lab-2026q3",
+}) {
+  return `
+INSERT INTO envelopes (
+  conversation_id, position, envelope_id, envelope_class, sender_type,
+  sender_account_id, sender_installation_id, epoch, roster_version,
+  base_confirmed_transcript_hash, resulting_confirmed_transcript_hash,
+  content_type, envelope_bytes, envelope_sha256, previous_head_hash,
+  leaf_hash, head_hash, log_signing_key_id, log_checkpoint_digest,
+  log_head_signature, received_at, expires_at
+) VALUES (
+  '00000000-0000-4000-8000-000000000301', ${position}, '${envelopeId}',
+  'application', 'installation', '00000000-0000-4000-8000-000000000003',
+  '00000000-0000-4000-8000-000000000004', 0, 0, ${transcripts},
+  '${contentType}', decode('ab', 'hex'), ${HEX32("e1")}, ${HEX32("e2")},
+  ${HEX32("e3")}, decode(repeat('${headByte}', 32), 'hex'), '${signingKeyId}',
+  ${HEX32("e4")}, ${signature}, ${receivedAt}, now() + interval '30 days'
+)`;
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function proveConcurrentPositionFencing(databaseUrl) {
+  const { spawn } = await import("node:child_process");
+  const holderSql = `BEGIN;
+${envelopeInsert({ position: "5", envelopeId: "00000000-0000-4000-8000-000000000501", headByte: "f1" })};
+SELECT pg_sleep(1.5);
+COMMIT;`;
+  const holder = spawn(
+    "psql",
+    ["-X", "-q", "-v", "ON_ERROR_STOP=1", "-c", holderSql, databaseUrl],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  const holderExit = new Promise((resolve) => holder.on("close", resolve));
+  await sleep(500);
+  const contender = sql(
+    databaseUrl,
+    envelopeInsert({
+      position: "5",
+      envelopeId: "00000000-0000-4000-8000-000000000502",
+      headByte: "f2",
+    }),
+    { expectFailure: true },
+  );
+  assert.match(contender, /duplicate key/);
+  assert.equal(await holderExit, 0, "the first writer must commit its fenced position");
+  const [[survivors]] = sql(
+    databaseUrl,
+    `SELECT count(*) FROM envelopes
+     WHERE conversation_id = '00000000-0000-4000-8000-000000000301' AND position = 5`,
+  );
+  assert.equal(survivors, "1", "exactly one envelope may claim a position under concurrency");
+  console.error("ok - concurrent writers cannot double-claim an envelope position");
+}
+
+async function proveConcurrentMigrationRunners(port) {
+  const { spawn } = await import("node:child_process");
+  const created = run("createdb", ["-h", "127.0.0.1", "-p", String(port), "-U", LAB_USER, "jbm_storage_lab_race"]);
+  assert.equal(created.status, 0, `createdb for the race database failed: ${created.stderr}`);
+  const raceUrl = `postgresql://${LAB_USER}@127.0.0.1:${port}/jbm_storage_lab_race`;
+  const runnerPath = new URL("./migrate.mjs", import.meta.url).pathname;
+  const startRunner = () =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, [runnerPath], {
+        env: { ...process.env, JBM_STORAGE_DATABASE_URL: raceUrl },
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("close", (code) => resolve({ code, stderr }));
+    });
+  const [first, second] = await Promise.all([startRunner(), startRunner()]);
+  const exitCodes = [first.code, second.code].sort();
+  assert.equal(exitCodes[0], 0, `at least one concurrent runner must succeed: ${first.stderr} ${second.stderr}`);
+  if (exitCodes[1] !== 0) {
+    assert.match(
+      `${first.stderr}${second.stderr}`,
+      /duplicate key|failed/,
+      "a losing concurrent runner must abort cleanly on the ledger fence",
+    );
+  }
+  const migrations = readMigrationFiles();
+  const [[ledgerCount]] = sql(raceUrl, `SELECT count(*) FROM storage_schema_migrations`);
+  assert.equal(ledgerCount, String(migrations.length), "the race must apply every migration exactly once");
+  const settle = migrateStorage(raceUrl, undefined, () => {});
+  assert.equal(settle.applied, 0, "a follow-up run after the race must be a no-op");
+  console.error("ok - concurrent migration runners serialize on the ledger fence");
 }
 
 const CREATOR_MEMBER = (planId) => `
@@ -295,6 +427,149 @@ async function main() {
     );
     assert.match(foreignPlanPackage, /conversation_plan_members_key_package_ref_plan_id_fkey/);
     console.error("ok - a welcome KeyPackage take must be bound to this exact plan");
+
+    const unregisteredProfile = sql(
+      databaseUrl,
+      planInsert(
+        "00000000-0000-7000-8000-000000000103",
+        "00000000-0000-4000-8000-000000000203",
+        CREATOR_MEMBER("00000000-0000-7000-8000-000000000103"),
+      ).replace(HEX32("52"), HEX32("59")),
+      { expectFailure: true },
+    );
+    assert.match(unregisteredProfile, /conversation_plans_release_profile_fk/);
+    const immutableProfile = sql(
+      databaseUrl,
+      `UPDATE archived_release_profiles SET delivery_limits_canonical = '{"x":1}'::jsonb`,
+      { expectFailure: true },
+    );
+    assert.match(immutableProfile, /immutable/);
+    console.error("ok - release profiles are a registry: unregistered pins fail, rows are immutable");
+
+    sql(databaseUrl, CONVERSATION_FIXTURE_SQL);
+    sql(databaseUrl, envelopeInsert({}));
+    console.error("ok - a canonical application envelope commits");
+
+    const badContentType = sql(
+      databaseUrl,
+      envelopeInsert({
+        position: "3",
+        envelopeId: "00000000-0000-4000-8000-000000000403",
+        headByte: "a3",
+        contentType: "application/vnd.juicebox.messaging.mls-public-message",
+      }),
+      { expectFailure: true },
+    );
+    assert.match(badContentType, /envelopes_class_content_type_check/);
+    const applicationWithTranscripts = sql(
+      databaseUrl,
+      envelopeInsert({
+        position: "3",
+        envelopeId: "00000000-0000-4000-8000-000000000403",
+        headByte: "a3",
+        transcripts: `${HEX32("b1")}, ${HEX32("b2")}`,
+      }),
+      { expectFailure: true },
+    );
+    assert.match(applicationWithTranscripts, /envelopes_transcript_shape_check/);
+    const shortSignature = sql(
+      databaseUrl,
+      envelopeInsert({
+        position: "3",
+        envelopeId: "00000000-0000-4000-8000-000000000403",
+        headByte: "a3",
+        signature: "decode(repeat('99', 63), 'hex')",
+      }),
+      { expectFailure: true },
+    );
+    assert.match(shortSignature, /envelopes_ed25519_signature_check/);
+    const subMillisecondReceipt = sql(
+      databaseUrl,
+      envelopeInsert({
+        position: "3",
+        envelopeId: "00000000-0000-4000-8000-000000000403",
+        headByte: "a3",
+        receivedAt: "timestamptz '2026-08-14 16:20:45.123456+00'",
+      }),
+      { expectFailure: true },
+    );
+    assert.match(subMillisecondReceipt, /envelopes_received_at_millisecond_check/);
+    const unknownSigningKey = sql(
+      databaseUrl,
+      envelopeInsert({
+        position: "3",
+        envelopeId: "00000000-0000-4000-8000-000000000403",
+        headByte: "a3",
+        signingKeyId: "unregistered-key",
+      }),
+      { expectFailure: true },
+    );
+    assert.match(unknownSigningKey, /envelopes_log_signing_key_fk/);
+    console.error(
+      "ok - envelope class/content-type, transcript shape, signature length, canonical receipt time, and signing-key registry are relational",
+    );
+
+    sql(
+      databaseUrl,
+      `INSERT INTO log_witness_receipts (
+         conversation_id, position, head_hash, witness_checkpoint_id,
+         witness_tree_size, witness_root_hash, witness_key_id,
+         witness_signature, witnessed_at
+       ) VALUES (
+         '00000000-0000-4000-8000-000000000301', 2, decode(repeat('a2', 32), 'hex'),
+         'fictional-witness-checkpoint', 1, decode(repeat('c1', 32), 'hex'),
+         'fictional-witness-key', decode(repeat('c2', 64), 'hex'), now()
+       )`,
+    );
+    const forgedWitnessHead = sql(
+      databaseUrl,
+      `INSERT INTO log_witness_receipts (
+         conversation_id, position, head_hash, witness_checkpoint_id,
+         witness_tree_size, witness_root_hash, witness_key_id,
+         witness_signature, witnessed_at
+       ) VALUES (
+         '00000000-0000-4000-8000-000000000301', 2, decode(repeat('ff', 32), 'hex'),
+         'fictional-witness-checkpoint', 1, decode(repeat('c1', 32), 'hex'),
+         'another-fictional-witness-key', decode(repeat('c2', 64), 'hex'), now()
+       )`,
+      { expectFailure: true },
+    );
+    assert.match(forgedWitnessHead, /log_witness_receipts_head_identity_fk/);
+    console.error("ok - witness receipts bind the exact (conversation, position, head hash) identity");
+
+    const welcomeOnApplication = sql(
+      databaseUrl,
+      `INSERT INTO mls_welcomes (
+         conversation_id, commit_position, target_installation_id,
+         commit_envelope_id, welcome_bytes, welcome_sha256, created_at, expires_at
+       ) VALUES (
+         '00000000-0000-4000-8000-000000000301', 2, '00000000-0000-4000-8000-000000000004',
+         '00000000-0000-4000-8000-000000000402', decode('aa', 'hex'),
+         decode(repeat('d1', 32), 'hex'), now(), now() + interval '1 day'
+       )`,
+      { expectFailure: true },
+    );
+    assert.match(welcomeOnApplication, /mls_welcomes_commit_class_fk/);
+    console.error("ok - a Welcome cannot bind to a non-Commit envelope");
+
+    const matrixClause = sql(
+      databaseUrl,
+      `SELECT pg_get_constraintdef(oid) FROM pg_constraint
+       WHERE conname = 'memberships_purpose_role_matrix_check'`,
+    );
+    assert.match(matrixClause[0][0], /purchase_support/);
+    assert.match(matrixClause[0][0], /subscriber/);
+    const mutatedPurpose = sql(
+      databaseUrl,
+      `UPDATE conversations SET delivery_purpose = 'announcement'
+       WHERE conversation_id = '00000000-0000-4000-8000-000000000301'`,
+      { expectFailure: true },
+    );
+    assert.match(mutatedPurpose, /immutable/);
+    console.error("ok - the purpose-to-role matrix is declared and delivery purpose is immutable");
+
+    await proveConcurrentPositionFencing(databaseUrl);
+    await proveConcurrentMigrationRunners(port);
 
     console.error("Storage lab passed. This is lab evidence only; G2 remains open.");
   } finally {
