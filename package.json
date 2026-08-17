@@ -15,6 +15,8 @@
     "evidence:template:check": "node scripts/generate-verification-evidence-template.mjs --check",
     "evidence:check": "npm run evidence:template:check && node scripts/check-verification-evidence.mjs --mode contract",
     "evidence:promotion": "node scripts/check-verification-evidence.mjs --mode promotion",
+    "storage:migrate": "node scripts/storage/migrate.mjs",
+    "test:storage": "node scripts/storage/run-storage-lab.mjs",
     "crypto:check": "sh crypto/scripts/check.sh",
     "build": "next build --webpack && node scripts/stage-standalone.mjs",
     "build:lab": "node scripts/run-local-lab.mjs build",

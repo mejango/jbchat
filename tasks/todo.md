@@ -17,16 +17,27 @@ codeable item.
       passthrough (preflight + reservation handlers; finalize already had it)
 - [x] Regenerate evidence template (3-line digest refresh)
 - [x] `npm run check` green under Node 22.23.1 (583/583 unit tests)
-- [ ] `npm run check:all` green (e2e, production-security, shared)
-- [ ] Commit
+- [x] `npm run check:all` green (e2e, production-security, shared)
+- [x] Committed as 07d452a
 
 ## Phase 2 — G2 storage layer (biggest open engineering block)
-- [ ] PostgreSQL migrations implementing the documented logical DDL
-- [ ] Repository implementing AtomicDeliveryPersistencePort against Postgres
-- [ ] Restore/concurrency/partition tests per storage-and-retention.md
+- [x] Unit 1: checked-in migrations (spec baseline DDL verbatim, 64+64 hash
+      partitions, conversation_plan_members with deferred exactly-one-creator),
+      checksummed advisory-locked runner (`npm run storage:migrate`), and a
+      throwaway-cluster lab (`npm run test:storage`, 8 probes green on PG14).
+      Kept out of `npm run check` so it stays offline/database-free.
+- [ ] Unit 2: remaining section-1 blocker probes (envelope class/content-type,
+      transcript-hash shape, witness receipt identity, Welcome/Commit binding,
+      signing-key registry, replay/fence invisibility, page-end projections,
+      policy-head anchors, scope mappings) + concurrent-write tests
+- [ ] Unit 3: production repository implementing AtomicDeliveryPersistencePort
+      against this schema (driver selection is a supply-chain decision to flag)
+- [ ] Unit 4: section-11.2 restore drill + failover evidence (operational)
 
 ## Phase 3 — production web surface
-- [ ] `/embed/{tenantPublicId}` route with one-use context issuance/redemption
+- [ ] `/embed/{tenantPublicId}` route — SEQUENCED AFTER storage: the current
+      404 is an intentional, e2e-tested launch gate; the route may only land
+      together with real context issuance/redemption per embed-contract.md
 - [ ] Host SDK stub + launcher contract per embed-contract.md
 
 ## Phase 4 — identity & chain authority
