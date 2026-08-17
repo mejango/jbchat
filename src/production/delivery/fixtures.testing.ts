@@ -84,7 +84,22 @@ export const LAB_ROLE_CREDENTIAL_ID =
 export const LAB_POLICY_SIGNING_KEY_ID = "fictional-policy-lab-2026q3";
 export const LAB_LOG_SIGNING_KEY_ID = "fictional-delivery-lab-2026q3";
 
-function fictionalMlsRosterProjections() {
+export interface FictionalLabExtraMember {
+  readonly accountId: string;
+  readonly installationId: string;
+  readonly credentialId: string;
+  readonly credentialFingerprint: string;
+  readonly credentialRevocationVersion?: string;
+  readonly credentialState?: "active" | "suspended" | "revoked" | "superseded";
+  readonly credentialExpiresAt?: string;
+  readonly joinedPosition: string;
+  readonly removedPosition: string | null;
+  readonly installationState: "active" | "suspended" | "revoked";
+}
+
+function fictionalMlsRosterProjections(
+  extraMembers: readonly FictionalLabExtraMember[] = [],
+) {
   return [
     {
       conversationId: parseConversationId(LAB_CONVERSATION_ID),
@@ -94,7 +109,6 @@ function fictionalMlsRosterProjections() {
       installationId: parseInstallationId(LAB_INSTALLATION_ID),
       credentialId: parseCredentialId(LAB_CREDENTIAL_ID),
       credentialFingerprint: parseFingerprint32(LAB_CREDENTIAL_FINGERPRINT),
-      credentialRevocationVersion: parseUint63String("4"),
     },
     {
       conversationId: parseConversationId(LAB_CONVERSATION_ID),
@@ -106,8 +120,16 @@ function fictionalMlsRosterProjections() {
       credentialFingerprint: parseFingerprint32(
         LAB_RECIPIENT_CREDENTIAL_FINGERPRINT,
       ),
-      credentialRevocationVersion: parseUint63String("1"),
     },
+    ...extraMembers.map((member) => ({
+      conversationId: parseConversationId(LAB_CONVERSATION_ID),
+      conversationGeneration: parseUint63String("1"),
+      rosterVersion: parseUint63String("28"),
+      accountId: parseAccountId(member.accountId),
+      installationId: parseInstallationId(member.installationId),
+      credentialId: parseCredentialId(member.credentialId),
+      credentialFingerprint: parseFingerprint32(member.credentialFingerprint),
+    })),
   ];
 }
 
@@ -129,6 +151,7 @@ interface AppendFixtureOptions {
 
 export function fictionalDeliveryLabSeed(
   deliveryLimits: DeliveryLimits = fictionalDeliveryLimits(),
+  extraMembers: readonly FictionalLabExtraMember[] = [],
 ) {
   const deliveryLimitsDigest = computeDeliveryLimitsDigest(deliveryLimits);
   const quotaSubjects = {
@@ -226,10 +249,32 @@ export function fictionalDeliveryLabSeed(
       removedPosition: null,
       installationState: "active" as const,
     },
+    ...extraMembers.map((member) => ({
+      conversationId: parseConversationId(LAB_CONVERSATION_ID),
+      conversationGeneration: parseUint63String("1"),
+      recipientSetVersion: parseUint63String("1"),
+      accountId: parseAccountId(member.accountId),
+      installationId: parseInstallationId(member.installationId),
+      credentialId: parseCredentialId(member.credentialId),
+      credentialFingerprint: parseFingerprint32(member.credentialFingerprint),
+      credentialRevocationVersion: parseUint63String(
+        member.credentialRevocationVersion ?? "1",
+      ),
+      credentialState: member.credentialState ?? ("active" as const),
+      credentialExpiresAt: parseRfc3339Millis(
+        member.credentialExpiresAt ?? "2026-09-14T16:20:45.123Z",
+      ),
+      joinedPosition: parseUint63String(member.joinedPosition),
+      removedPosition:
+        member.removedPosition === null
+          ? null
+          : parseUint63String(member.removedPosition),
+      installationState: member.installationState,
+    })),
   ];
   const recipientSetHash =
     computeApplicationAppendRecipientSetHash(recipientProjections);
-  const mlsRosterProjections = fictionalMlsRosterProjections();
+  const mlsRosterProjections = fictionalMlsRosterProjections(extraMembers);
   const rosterHash = computeApplicationAppendMlsRosterHash(
     mlsRosterProjections,
   );

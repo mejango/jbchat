@@ -142,6 +142,8 @@ describe("application-envelope delivery service boundary", () => {
                 },
                 finalizeApplicationAppendAtomically: (...args) =>
                   base.atomicPersistence.finalizeApplicationAppendAtomically(...args),
+                retireExpiredApplicationAppendAtomically: (...args) =>
+                  base.atomicPersistence.retireExpiredApplicationAppendAtomically(...args),
               },
             };
       const service = createApplicationEnvelopeDeliveryService(
@@ -270,7 +272,10 @@ describe("application-envelope delivery service boundary", () => {
             }
           : {
               ...store.productionPorts,
-              checkpointSigner: { sign: never },
+              checkpointSigner: {
+                signExact: never,
+                resolveOrCancelIfUnsigned: never,
+              },
             };
       const service = createApplicationEnvelopeDeliveryService(
         ports,
@@ -296,7 +301,7 @@ describe("application-envelope delivery service boundary", () => {
             calls += 1;
             return Promise.resolve({
               status: "retry",
-              reasonCode: "pending-other",
+              reasonCode: "snapshot-changed",
             });
           },
         },
@@ -339,11 +344,19 @@ describe("application-envelope delivery service boundary", () => {
             trace.push("finalize");
             return base.atomicPersistence.finalizeApplicationAppendAtomically(...args);
           },
+          retireExpiredApplicationAppendAtomically: (...args) => {
+            trace.push("retire");
+            return base.atomicPersistence.retireExpiredApplicationAppendAtomically(...args);
+          },
         },
         checkpointSigner: {
-          sign: (...args) => {
+          signExact: (...args) => {
             trace.push("sign");
-            return base.checkpointSigner.sign(...args);
+            return base.checkpointSigner.signExact(...args);
+          },
+          resolveOrCancelIfUnsigned: (...args) => {
+            trace.push("resolve-or-cancel");
+            return base.checkpointSigner.resolveOrCancelIfUnsigned(...args);
           },
         },
         checkpointSignatureVerifier: {
@@ -463,9 +476,13 @@ describe("application-envelope delivery service boundary", () => {
           },
           finalizeApplicationAppendAtomically:
             atomic.finalizeApplicationAppendAtomically.bind(atomic),
+          retireExpiredApplicationAppendAtomically:
+            atomic.retireExpiredApplicationAppendAtomically.bind(atomic),
         },
         checkpointSigner: {
-          sign: () =>
+          signExact: () =>
+            Promise.resolve({ status: "unavailable", reasonCode: "not-configured" }),
+          resolveOrCancelIfUnsigned: () =>
             Promise.resolve({ status: "unavailable", reasonCode: "not-configured" }),
         },
       },
@@ -498,10 +515,10 @@ describe("application-envelope delivery service boundary", () => {
         ...valid,
         pendingIntent: {
           ...valid.pendingIntent,
-          nextSnapshot: {
-            ...valid.pendingIntent.nextSnapshot,
+          commitProjection: {
+            ...valid.pendingIntent.commitProjection,
             conversation: {
-              ...valid.pendingIntent.nextSnapshot.conversation,
+              ...valid.pendingIntent.commitProjection.conversation,
               currentLogHeadHash: ZERO_HASH32,
             },
           },
@@ -562,6 +579,8 @@ const dependencyFailureCases: readonly [
         reserveApplicationAppendAtomically: () => Promise.resolve({ nope: true }),
         finalizeApplicationAppendAtomically: (...args) =>
           base.atomicPersistence.finalizeApplicationAppendAtomically(...args),
+        retireExpiredApplicationAppendAtomically: (...args) =>
+          base.atomicPersistence.retireExpiredApplicationAppendAtomically(...args),
       },
     }),
   ],
@@ -569,7 +588,10 @@ const dependencyFailureCases: readonly [
     "resolved-malformed signer",
     (base) => ({
       ...base,
-      checkpointSigner: { sign: () => Promise.resolve({ signed: false }) },
+      checkpointSigner: {
+        signExact: () => Promise.resolve({ signed: false }),
+        resolveOrCancelIfUnsigned: () => Promise.resolve({ signed: false }),
+      },
     }),
   ],
   [
@@ -589,6 +611,8 @@ const dependencyFailureCases: readonly [
         reserveApplicationAppendAtomically: (...args) =>
           base.atomicPersistence.reserveApplicationAppendAtomically(...args),
         finalizeApplicationAppendAtomically: () => Promise.resolve({ nope: true }),
+        retireExpiredApplicationAppendAtomically: (...args) =>
+          base.atomicPersistence.retireExpiredApplicationAppendAtomically(...args),
       },
     }),
   ],

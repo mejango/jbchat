@@ -4,9 +4,9 @@
   "generated_at": "2026-01-01T00:05:00Z",
   "evidence_as_of": "2026-01-01T00:05:00Z",
   "policy": {
-    "verification_spec_digest": "sha256:df4c8afbae189a209014b2984443c26c20818645f00c12717e49977c43c4d8e1",
-    "launch_gates_digest": "sha256:5978258b16badd6ff62f72a489a1f4b03f86f9096223ef4d3c261ffaf28e5465",
-    "requirement_catalog_digest": "sha256:8aef685208b52a1152b5bc8fc34eb37cce6b353ca1d605c7ad3f60ea008acef1",
+    "verification_spec_digest": "sha256:260d27e5fa761f9bb75fa56088b36bff1a99eb0f9c7a117f992c6bb18c802d40",
+    "launch_gates_digest": "sha256:dc838e82a0bfe9157c9b73f1cefa833680ad2b0158d855023d45ca08d388080a",
+    "requirement_catalog_digest": "sha256:99b15f922426fafa2fc62cb995d6413c5591a75d545f2a056c862251fbe166bb",
     "evidence_schema_digest": "sha256:49c4568fc38fc907b301a092fd5d4f72c22046df510ef1c462f7e01c9f9d4cff",
     "evidence_checker_digest": "sha256:a4bf0f74a57110a0b244da44f068266d1e06cf1948388c44c722a395a3d56658"
   },

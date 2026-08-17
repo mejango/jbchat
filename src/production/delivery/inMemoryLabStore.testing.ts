@@ -18,22 +18,39 @@ import {
   computeEnvelopeLeafHash,
   computeEnvelopeSha256,
   computeLogHeadHash,
+  canonicalLengthPrefixed,
   sha256Bytes,
 } from "./hashes";
 import { classifyHttpIdempotencyCommitment } from "./idempotency";
-import type {
-  AtomicApplicationAppendCommand,
-  AtomicDeliveryPersistencePort,
-  DeliveryCheckpointSignatureVerificationRequest,
-  DeliveryCheckpointSigningRequest,
-  DeliveryInvocationContext,
-  FinalizeApplicationAppendInput,
-  MlsWireInspectionRequest,
-  PolicyHeadProofVerificationRequest,
-  PrepareUnsignedApplicationAppend,
-  ProductionDeliveryPorts,
+import {
+  computeApplicationAppendFenceTokenHash,
+  computeApplicationAppendSignerFenceRecordDigest,
+  computeApplicationAppendSignerFenceVerificationEvidenceDigest,
+  parseApplicationAppendReservationFence,
+  parseApplicationAppendSignerFenceResolution,
+  parseApplicationAppendSignerFenceVerificationEvidence,
+  parseDurableApplicationAppendSignerFenceSignedResolution,
+  type ApplicationAppendReservationFence,
+  type ApplicationAppendSignerFenceEvidenceVerificationRequest,
+  type ApplicationAppendSignerFenceResolution,
+  type ApplicationAppendSignerFenceResolutionExpectation,
+  type ApplicationAppendSignerFenceResolutionRequest,
+  type ApplicationAppendSignerFenceVerificationEvidence,
+  type AtomicApplicationAppendCommand,
+  type AtomicApplicationAppendReservation,
+  type AtomicDeliveryPersistencePort,
+  type DeliveryCheckpointSignatureVerificationRequest,
+  type DeliveryCheckpointSigningRequest,
+  type DeliveryInvocationContext,
+  type FinalizeApplicationAppendInput,
+  type MlsWireInspectionRequest,
+  type PolicyHeadProofVerificationRequest,
+  type PrepareUnsignedApplicationAppend,
+  type ProductionDeliveryPorts,
+  type RetireExpiredApplicationAppendInput,
 } from "./ports";
 import {
+  acceptedApplicationAppendIntentFromPending,
   computeAtomicApplicationAppendCommandDigest,
   computeMlsApplicationWireInspectionEvidenceDigest,
   parseApplicationEnvelopeReceipt,
@@ -42,24 +59,42 @@ import {
   parsePendingApplicationAppendIntent,
   parsePreparedApplicationAppend,
   receiptFromStoredApplicationEnvelope,
+  type AcceptedApplicationAppendIntent,
+  type ApplicationEnvelopeReceipt,
   type PendingApplicationAppendIntent,
-  type PersistedApplicationAppendAcceptance,
 } from "./service";
 import {
+  computeApplicationAppendFanoutEvidenceDigest,
+  computeApplicationAppendMailboxProjectionDigest,
+  computeApplicationAppendMlsRosterHash,
+  computeApplicationAppendOutboxProjectionDigest,
+  computeApplicationAppendRecipientSetHash,
   computeLockedApplicationAppendSnapshotDigest,
   computePolicyHeadProofEvidenceDigest,
+  parseApplicationAppendFanoutEvidence,
+  parseApplicationAppendFanoutPlan,
+  parseApplicationAppendMlsRosterProjections,
+  parseApplicationAppendRecipientProjections,
   parseLockedApplicationAppendSnapshot,
   parsePolicyHeadProofEvidence,
   refreshLockedApplicationAppendAuthorizationSnapshot,
-  validateLockedApplicationAppendStateTransition,
+  validateLockedApplicationAppendQuotaFinalizationTransition,
+  validateLockedApplicationAppendQuotaReleaseTransition,
+  type ApplicationAppendFanoutEvidence,
+  type ApplicationAppendFanoutPlan,
+  type ApplicationAppendMlsRosterProjection,
+  type ApplicationAppendQuotaCapacityReservation,
+  type ApplicationAppendRecipientProjection,
   type LockedApplicationAppendSnapshot,
   type LockedConversationUsage,
+  type LockedQuotaCounter,
   type PolicyHeadProofEvidence,
 } from "./state";
 import {
   computeDeliveryCheckpointSignatureEvidenceDigest,
   parseDeliveryRealmId,
   parseDeliveryCheckpointSignatureEvidence,
+  type DeliveryCheckpointSignatureEvidence,
 } from "./sync";
 import {
   MLS_PRIVATE_MESSAGE_MEDIA_TYPE,
@@ -90,6 +125,8 @@ import {
 
 const HTTP_IDEMPOTENCY_TTL_MILLISECONDS = 7 * 24 * 60 * 60 * 1_000;
 const TRANSACTION_DEADLINE_MARGIN_MILLISECONDS = 250;
+const FICTIONAL_FENCE_TOKEN_DOMAIN =
+  "jbm-fictional-lab-application-append-fence-token/v1";
 const FICTIONAL_ED25519_PKCS8_PREFIX = Buffer.from(
   "302e020100300506032b657004220420",
   "hex",
@@ -151,15 +188,6 @@ export interface InMemoryDeliveryLabAttachmentSeed {
   readonly boundEnvelopeId: unknown;
 }
 
-export interface InMemoryDeliveryLabRecipientProjectionSeed {
-  readonly conversationId: unknown;
-  readonly installationId: unknown;
-  readonly rosterVersion: unknown;
-  readonly installationState: unknown;
-  readonly joinedPosition: unknown;
-  readonly removedPosition: unknown;
-}
-
 export interface InMemoryDeliveryLabSeed {
   readonly snapshot: unknown;
   readonly basePosition: unknown;
@@ -169,6 +197,7 @@ export interface InMemoryDeliveryLabSeed {
   readonly signingKeyValidFrom: unknown;
   readonly signingKeyValidUntil: unknown;
   readonly recipientProjections: unknown;
+  readonly mlsRosterProjections: unknown;
   readonly attachments: unknown;
 }
 
@@ -225,16 +254,16 @@ interface LabAttachment {
   readonly boundEnvelopeId: EnvelopeId | null;
 }
 
-interface LabRecipientProjection {
-  readonly conversationId: ConversationId;
-  readonly installationId: InstallationId;
-  readonly rosterVersion: Uint63String;
-  readonly installationState: "active" | "suspended" | "revoked";
-  readonly joinedPosition: Uint63String;
-  readonly removedPosition: Uint63String | null;
+/** Durable acceptance projection; per-invocation replay fields are added per response. */
+interface StoredAcceptance {
+  readonly receipt: ApplicationEnvelopeReceipt;
+  readonly acceptedIntent: AcceptedApplicationAppendIntent;
+  readonly envelope: StoredApplicationEnvelope;
+  readonly signatureEvidence: DeliveryCheckpointSignatureEvidence;
+  readonly signerFenceEvidence: ApplicationAppendSignerFenceVerificationEvidence;
+  readonly fanoutEvidence: ApplicationAppendFanoutEvidence;
+  readonly finalizedAt: Rfc3339Millis;
 }
-
-type StoredAcceptance = PersistedApplicationAppendAcceptance;
 
 interface HttpIdempotencyRecord {
   readonly requestCommitment: Hash32;
@@ -242,17 +271,15 @@ interface HttpIdempotencyRecord {
   readonly expiresAtMilliseconds: number;
 }
 
-interface SignerFence {
-  readonly conversationId: ConversationId;
-  readonly position: Uint63String;
-  readonly checkpointDigest: Hash32;
-  readonly signature: Ed25519Signature;
+interface SignerFenceRecord {
+  readonly resolution: ApplicationAppendSignerFenceResolution;
   callCount: number;
 }
 
 interface LabDatabase {
   snapshot: LockedApplicationAppendSnapshot;
   pending: PendingApplicationAppendIntent | null;
+  pendingReservedAt: Rfc3339Millis | null;
   envelopes: StoredApplicationEnvelope[];
   mailboxes: Map<InstallationId, DeliveryLabMailboxEntry[]>;
   outbox: DeliveryLabOutboxRecord[];
@@ -269,7 +296,8 @@ interface ParsedLabSeed {
   readonly signingKeyId: SigningKeyId;
   readonly signingKeyValidFrom: Rfc3339Millis;
   readonly signingKeyValidUntil: Rfc3339Millis;
-  readonly recipientProjections: readonly LabRecipientProjection[];
+  readonly recipientProjections: readonly ApplicationAppendRecipientProjection[];
+  readonly mlsRosterProjections: readonly ApplicationAppendMlsRosterProjection[];
   readonly attachments: readonly LabAttachment[];
 }
 
@@ -295,8 +323,11 @@ export class InMemoryDeliveryLabStore
   private readonly signingKeyId: SigningKeyId;
   private readonly signingKeyValidFrom: Rfc3339Millis;
   private readonly signingKeyValidUntil: Rfc3339Millis;
-  private readonly recipientProjections: readonly LabRecipientProjection[];
-  private readonly signerFences = new Map<string, SignerFence>();
+  private readonly recipientProjections: readonly ApplicationAppendRecipientProjection[];
+  private readonly mlsRosterProjections: readonly ApplicationAppendMlsRosterProjection[];
+  private readonly signerFences = new Map<string, SignerFenceRecord[]>();
+  private readonly retiredIntents = new Map<Hash32, Rfc3339Millis>();
+  private laneGeneration = 0n;
   private failpoint: DeliveryLabFailpoint | null = null;
   private transactionTail: Promise<void> = Promise.resolve();
 
@@ -320,9 +351,11 @@ export class InMemoryDeliveryLabStore
     this.signingKeyValidFrom = seed.signingKeyValidFrom;
     this.signingKeyValidUntil = seed.signingKeyValidUntil;
     this.recipientProjections = seed.recipientProjections;
+    this.mlsRosterProjections = seed.mlsRosterProjections;
     this.database = {
       snapshot: cloneSnapshot(seed.snapshot),
       pending: null,
+      pendingReservedAt: null,
       envelopes: [],
       mailboxes: new Map(
         seed.recipientProjections.map(({ installationId }) => [
@@ -361,8 +394,16 @@ export class InMemoryDeliveryLabStore
         verify: () => Promise.resolve(unavailable()),
       },
       checkpointSigner: {
-        sign: (request: DeliveryCheckpointSigningRequest) =>
-          this.signCheckpointForLab(request),
+        signExact: (request: DeliveryCheckpointSigningRequest) =>
+          this.signExactForLab(request),
+        resolveOrCancelIfUnsigned: (
+          request: ApplicationAppendSignerFenceResolutionRequest,
+        ) => this.resolveOrCancelForLab(request),
+      },
+      signerFenceEvidenceVerifier: {
+        verify: (
+          request: ApplicationAppendSignerFenceEvidenceVerificationRequest,
+        ) => this.verifySignerFenceEvidence(request),
       },
       checkpointSignatureVerifier: {
         verify: (request: DeliveryCheckpointSignatureVerificationRequest) =>
@@ -431,12 +472,28 @@ export class InMemoryDeliveryLabStore
       ).length,
       signerHistory: Object.freeze(
         [...this.signerFences.values()]
+          .flat()
+          .filter(
+            (record): record is SignerFenceRecord & {
+              resolution: ApplicationAppendSignerFenceResolution & {
+                status: "signed";
+              };
+            } => record.resolution.status === "signed",
+          )
           .sort((left, right) =>
-            `${left.conversationId}\u0000${left.position}`.localeCompare(
-              `${right.conversationId}\u0000${right.position}`,
+            `${left.resolution.conversationId} ${left.resolution.position}`.localeCompare(
+              `${right.resolution.conversationId} ${right.resolution.position}`,
             ),
           )
-          .map((entry) => Object.freeze({ ...entry })),
+          .map((record) =>
+            Object.freeze({
+              conversationId: record.resolution.conversationId,
+              position: record.resolution.position,
+              checkpointDigest: record.resolution.checkpointDigest,
+              signature: record.resolution.checkpointSignature,
+              callCount: record.callCount,
+            }),
+          ),
       ),
     });
   }
@@ -482,13 +539,7 @@ export class InMemoryDeliveryLabStore
   }
 
   reserveApplicationAppendAtomically(
-    reservationValue: {
-      command: AtomicApplicationAppendCommand;
-      expectedSnapshotDigest: Hash32;
-      expectedAuthorizationSnapshotDigest: Hash32;
-      wireInspectionEvidence: unknown;
-      policyHeadProofEvidence: unknown;
-    },
+    reservationValue: AtomicApplicationAppendReservation,
     prepareUnsigned: PrepareUnsignedApplicationAppend,
     invocation: DeliveryInvocationContext,
   ): Promise<unknown> {
@@ -496,6 +547,10 @@ export class InMemoryDeliveryLabStore
       if (!this.invocationIsLive(invocation)) return unavailable("timeout");
       const command = parseAtomicApplicationAppendCommand(
         reservationValue.command,
+      );
+      const admissionStartedAt = parseRfc3339Millis(
+        reservationValue.admissionStartedAt,
+        "reservation admission start",
       );
       const replay = this.lookupReplay(command);
       if (replay.kind === "result") return replay.value;
@@ -512,7 +567,7 @@ export class InMemoryDeliveryLabStore
         parseHash32(reservationValue.expectedSnapshotDigest) !==
         computeLockedApplicationAppendSnapshotDigest(this.database.snapshot)
       ) {
-        return retry("snapshot-changed");
+        return retry();
       }
       try {
         enforceApplicationAppendDeliveryLimits(
@@ -547,8 +602,11 @@ export class InMemoryDeliveryLabStore
         expectedAuthorizationSnapshotDigest !==
         computeLockedApplicationAppendSnapshotDigest(authorizationSnapshot)
       ) {
-        return retry("snapshot-changed");
+        return retry();
       }
+      const reservationFence = this.allocateReservationFence(
+        command.semanticIdentity.conversationId,
+      );
       this.maybeFail("before-reservation-prepare");
       const preparedValue = prepareUnsigned({
         lockedSnapshot: cloneSnapshot(authorizationSnapshot),
@@ -556,6 +614,17 @@ export class InMemoryDeliveryLabStore
         previousHeadHash: this.database.snapshot.conversation.currentLogHeadHash,
         attachmentByteLength,
         activeSigningKeyId: this.signingKeyId,
+        activeSigningKeyValidUntil: this.signingKeyValidUntil,
+        reservationFence: {
+          generation: reservationFence.generation,
+          token: reservationFence.token,
+        },
+        mlsRosterProjections: this.mlsRosterProjections.map((row) => ({
+          ...row,
+        })),
+        recipientProjections: this.recipientProjections.map((row) => ({
+          ...row,
+        })),
         transactionDeadline: transactionDeadline(
           this.nowValue,
           invocation.deadline,
@@ -575,6 +644,9 @@ export class InMemoryDeliveryLabStore
           parseHash32(reservationValue.expectedSnapshotDigest) ||
         pending.expectedAuthorizationSnapshotDigest !==
           expectedAuthorizationSnapshotDigest ||
+        pending.admissionStartedAt !== admissionStartedAt ||
+        pending.reservationFence.generation !== reservationFence.generation ||
+        pending.reservationFence.token !== reservationFence.token ||
         pending.wireInspectionEvidence.evidenceDigest !==
           wireEvidence.evidenceDigest ||
         pending.policyHeadProofEvidence.evidenceDigest !==
@@ -582,20 +654,14 @@ export class InMemoryDeliveryLabStore
       ) {
         throw new TypeError("Reservation callback substituted command or proof facts.");
       }
-      validateLockedApplicationAppendStateTransition({
-        priorSnapshot: authorizationSnapshot,
-        expectation: pending.expectation,
-        authoritativeReceivedAt: pending.envelope.receivedAt,
-        nextHeadHash: pending.envelope.headHash,
-        preparedNextSnapshot: pending.nextSnapshot,
-      });
       const draft = cloneDatabase(this.database);
       draft.pending = pending;
+      draft.pendingReservedAt = this.nowValue;
       this.maybeFail("before-reservation-commit");
       this.assertInternalInvariants(draft);
       this.database = draft;
       this.maybeFail("after-reservation-commit-before-response");
-      return pendingResult(command, pending, "none");
+      return this.pendingResultFor(command, pending, "none");
     });
   }
 
@@ -615,17 +681,71 @@ export class InMemoryDeliveryLabStore
         !this.database.pending ||
         this.database.pending.intentDigest !== pending.intentDigest
       ) {
-        return retry("pending-other");
+        const admitted = pending.admissionCommand;
+        const finalizedAcceptance = this.database.secondaryEnvelopes.get(
+          semanticEnvelopeKey(
+            admitted.realmId,
+            admitted.semanticIdentity.conversationId,
+            admitted.semanticIdentity.append.envelopeId,
+          ),
+        );
+        if (
+          finalizedAcceptance &&
+          finalizedAcceptance.acceptedIntent.intentDigest ===
+            pending.intentDigest
+        ) {
+          const replayForPending =
+            computeAtomicApplicationAppendCommandDigest(command) ===
+            pending.admissionCommandDigest
+              ? "none"
+              : applicationEnvelopeSemanticallyEqual(
+                    admitted.semanticIdentity,
+                    command.semanticIdentity,
+                  )
+                ? "envelope"
+                : "blocked";
+          return this.acceptedResultFor(
+            command,
+            finalizedAcceptance,
+            replayForPending,
+          );
+        }
+        return retry();
       }
+      const inputFence = parseApplicationAppendReservationFence(
+        inputValue.reservationFence,
+      );
+      const fanoutPlan = parseApplicationAppendFanoutPlan(
+        inputValue.fanoutPlan,
+        pending.admissionCommand.deliveryLimits
+          .conversationRecipientInstallationsMax,
+      );
       if (
-        !applicationEnvelopeSemanticallyEqual(
-          pending.admissionCommand.semanticIdentity,
-          command.semanticIdentity,
-        )
+        parseHash32(inputValue.pendingIntentDigest) !== pending.intentDigest ||
+        inputFence.generation !== pending.reservationFence.generation ||
+        inputFence.token !== pending.reservationFence.token ||
+        parseRfc3339Millis(inputValue.pendingExpiresAt) !==
+          pending.pendingExpiresAt ||
+        fanoutPlan.planDigest !== pending.fanoutPlan.planDigest
       ) {
-        return conflict();
+        return unavailable("malformed-dependency-response");
       }
       const signature = parseEd25519Signature(inputValue.signature);
+      const signedResolution =
+        parseDurableApplicationAppendSignerFenceSignedResolution(
+          inputValue.signedFenceResolution,
+          signerFenceExpectationFor(pending),
+        );
+      if (signedResolution.checkpointSignature !== signature) {
+        return unavailable("malformed-dependency-response");
+      }
+      const fenceEvidence = parseApplicationAppendSignerFenceVerificationEvidence(
+        inputValue.verifiedSignerFenceEvidence,
+        signedResolution,
+        parseRfc3339Millis(
+          dataValue(inputValue.verifiedSignerFenceEvidence, "verifiedAt"),
+        ),
+      );
       const signedEnvelope = parseStoredEnvelope({
         ...pending.envelope,
         logHeadSignature: signature,
@@ -638,7 +758,10 @@ export class InMemoryDeliveryLabStore
         pending.admissionCommand.deliveryLimits,
       );
       const signatureEvidence = parseDeliveryCheckpointSignatureEvidence(
-        inputValue.verifiedSignatureEvidence,
+        {
+          status: "verified",
+          ...(inputValue.verifiedSignatureEvidence as Record<string, unknown>),
+        },
         checkpointVerificationRequest(
           signedEnvelope,
           pending,
@@ -661,7 +784,7 @@ export class InMemoryDeliveryLabStore
           pending.expectedSnapshotDigest ||
         this.signingKeyId !== signedEnvelope.logSigningKeyId
       ) {
-        return retry("snapshot-changed");
+        return retry();
       }
       if (
         this.measureAttachments(
@@ -671,27 +794,44 @@ export class InMemoryDeliveryLabStore
       ) {
         return rejected("attachment-invalid");
       }
-      validateLockedApplicationAppendStateTransition({
-        priorSnapshot: pending.priorSnapshot,
-        expectation: pending.expectation,
-        authoritativeReceivedAt: pending.envelope.receivedAt,
-        nextHeadHash: pending.envelope.headHash,
-        preparedNextSnapshot: pending.nextSnapshot,
-      });
       this.assertRecipientProjectionsCurrent();
+      const quotaConversion = convertQuotaCapacity(pending, "finalize");
 
       const receipt = receiptFromStoredApplicationEnvelope(signedEnvelope);
+      const acceptedIntent = acceptedApplicationAppendIntentFromPending(
+        pending,
+        signedResolution,
+      );
+      const fanoutEvidence = buildFanoutEvidence(
+        pending.fanoutPlan,
+        signedEnvelope,
+      );
       const acceptance: StoredAcceptance = Object.freeze({
         receipt,
-        replay: "none",
-        invocationCommandDigest:
-          computeAtomicApplicationAppendCommandDigest(command),
-        pendingIntent: pending,
+        acceptedIntent,
         envelope: signedEnvelope,
         signatureEvidence,
+        signerFenceEvidence: fenceEvidence,
+        fanoutEvidence,
+        finalizedAt: this.nowValue,
       });
+      const semanticallyEqual = applicationEnvelopeSemanticallyEqual(
+        pending.admissionCommand.semanticIdentity,
+        command.semanticIdentity,
+      );
       const draft = cloneDatabase(this.database);
-      draft.snapshot = cloneSnapshot(pending.nextSnapshot);
+      draft.snapshot = parseLockedApplicationAppendSnapshot({
+        conversation: { ...pending.commitProjection.conversation },
+        membership: { ...this.database.snapshot.membership },
+        policyHead: { ...this.database.snapshot.policyHead },
+        sendGrant: { ...this.database.snapshot.sendGrant },
+        pendingRemovalCount: this.database.snapshot.pendingRemovalCount,
+        usage: { ...pending.commitProjection.usage },
+        quotaBindings: this.database.snapshot.quotaBindings.map((binding) => ({
+          ...binding,
+        })),
+        quotas: quotaConversion.map((quota) => ({ ...quota })),
+      });
       this.maybeFail("after-state-write");
       draft.envelopes.push(signedEnvelope);
       this.maybeFail("after-envelope-write");
@@ -700,7 +840,7 @@ export class InMemoryDeliveryLabStore
         pending.admissionCommand.semanticIdentity,
         signedEnvelope.envelopeId,
       );
-      this.fanOutEligibleRecipients(draft, signedEnvelope);
+      this.fanOutPlannedRecipients(draft, pending.fanoutPlan, signedEnvelope);
       this.maybeFail("after-mailbox-write");
       draft.outbox.push(
         Object.freeze({
@@ -722,10 +862,10 @@ export class InMemoryDeliveryLabStore
       this.maybeFail("after-secondary-write");
       const expiresAtMilliseconds =
         Date.parse(this.nowValue) + HTTP_IDEMPOTENCY_TTL_MILLISECONDS;
-      for (const idempotencyCommand of [
-        pending.admissionCommand,
-        command,
-      ]) {
+      const idempotencyCommands = semanticallyEqual
+        ? [pending.admissionCommand, command]
+        : [pending.admissionCommand];
+      for (const idempotencyCommand of idempotencyCommands) {
         draft.httpIdempotency.set(httpIdempotencyScope(idempotencyCommand), {
           requestCommitment: idempotencyCommand.requestCommitment,
           acceptance,
@@ -734,6 +874,7 @@ export class InMemoryDeliveryLabStore
       }
       this.maybeFail("after-idempotency-write");
       draft.pending = null;
+      draft.pendingReservedAt = null;
       this.maybeFail("before-finalization-commit");
       this.assertInternalInvariants(draft);
       this.database = draft;
@@ -742,8 +883,94 @@ export class InMemoryDeliveryLabStore
         computeAtomicApplicationAppendCommandDigest(command) ===
         pending.admissionCommandDigest
           ? "none"
-          : "envelope";
-      return acceptedResult(command, acceptance, replay);
+          : semanticallyEqual
+            ? "envelope"
+            : "blocked";
+      return this.acceptedResultFor(command, acceptance, replay);
+    });
+  }
+
+  retireExpiredApplicationAppendAtomically(
+    inputValue: RetireExpiredApplicationAppendInput,
+    invocation: DeliveryInvocationContext,
+  ): Promise<unknown> {
+    return this.withTransactionLock(() => {
+      if (!this.invocationIsLive(invocation)) return unavailable("timeout");
+      const command = parseAtomicApplicationAppendCommand(inputValue.command);
+      const pendingIntentDigest = parseHash32(inputValue.pendingIntentDigest);
+      const tombstone = this.retiredIntents.get(pendingIntentDigest);
+      if (tombstone !== undefined) {
+        return this.retiredResultFor(command, pendingIntentDigest, tombstone);
+      }
+      const current = this.database.pending;
+      if (!current || current.intentDigest !== pendingIntentDigest) {
+        return current
+          ? this.blockedByPendingResultFor(command, current)
+          : unavailable("malformed-dependency-response");
+      }
+      const pending = parsePendingApplicationAppendIntent(
+        inputValue.pendingIntent,
+      );
+      const inputFence = parseApplicationAppendReservationFence(
+        inputValue.reservationFence,
+      );
+      if (
+        pending.intentDigest !== current.intentDigest ||
+        inputFence.generation !== pending.reservationFence.generation ||
+        inputFence.token !== pending.reservationFence.token ||
+        parseRfc3339Millis(inputValue.pendingExpiresAt) !==
+          pending.pendingExpiresAt ||
+        this.nowValue < pending.pendingExpiresAt
+      ) {
+        return unavailable("malformed-dependency-response");
+      }
+      let resolution: ApplicationAppendSignerFenceResolution;
+      try {
+        resolution = parseApplicationAppendSignerFenceResolution(
+          inputValue.cancellationResolution,
+          this.signingRequestFor(pending, invocation),
+        );
+      } catch {
+        return unavailable("malformed-dependency-response");
+      }
+      if (
+        resolution.status !== "cancelled" ||
+        resolution.fenceRecordSigningKeyId !== this.signingKeyId ||
+        !verifyEd25519(
+          null,
+          Buffer.from(resolution.fenceRecordDigest, "base64url"),
+          FICTIONAL_DELIVERY_LAB_PUBLIC_KEY,
+          Buffer.from(resolution.fenceRecordSignature, "base64url"),
+        )
+      ) {
+        return unavailable("malformed-dependency-response");
+      }
+      try {
+        parseApplicationAppendSignerFenceVerificationEvidence(
+          inputValue.verifiedCancellationEvidence,
+          resolution,
+          parseRfc3339Millis(
+            dataValue(inputValue.verifiedCancellationEvidence, "verifiedAt"),
+          ),
+        );
+      } catch {
+        return unavailable("malformed-dependency-response");
+      }
+      const records = this.fenceRecordsAt(
+        pending.envelope.conversationId,
+        pending.envelope.position,
+      );
+      if (records.some((record) => record.resolution.status === "signed")) {
+        return unavailable("malformed-dependency-response");
+      }
+      convertQuotaCapacity(pending, "release");
+      const draft = cloneDatabase(this.database);
+      draft.pending = null;
+      draft.pendingReservedAt = null;
+      this.assertInternalInvariants(draft);
+      this.database = draft;
+      this.retiredIntents.set(pendingIntentDigest, this.nowValue);
+      return this.retiredResultFor(command, pendingIntentDigest, this.nowValue);
     });
   }
 
@@ -800,7 +1027,7 @@ export class InMemoryDeliveryLabStore
         value:
           classification.kind === "conflict"
             ? conflict()
-            : pendingResult(command, pending, "http"),
+            : this.pendingResultFor(command, pending, "http"),
       };
     }
     if (
@@ -816,11 +1043,21 @@ export class InMemoryDeliveryLabStore
           admitted.semanticIdentity,
           command.semanticIdentity,
         )
-          ? pendingResult(command, pending, "envelope")
+          ? this.pendingResultFor(command, pending, "envelope")
           : conflict(),
       };
     }
-    return { kind: "result", value: retry("pending-other") };
+    if (
+      admitted.realmId === command.realmId &&
+      admitted.semanticIdentity.conversationId ===
+        command.semanticIdentity.conversationId
+    ) {
+      return {
+        kind: "result",
+        value: this.blockedByPendingResultFor(command, pending),
+      };
+    }
+    return { kind: "miss" };
   }
 
   private lookupAcceptedReplay(
@@ -836,7 +1073,7 @@ export class InMemoryDeliveryLabStore
       );
       return classification.kind === "conflict"
         ? conflict()
-        : acceptedResult(command, http.acceptance, "http");
+        : this.acceptedResultFor(command, http.acceptance, "http");
     }
     const identity = command.semanticIdentity;
     const acceptance = this.database.secondaryEnvelopes.get(
@@ -848,11 +1085,303 @@ export class InMemoryDeliveryLabStore
     );
     if (!acceptance) return null;
     return applicationEnvelopeSemanticallyEqual(
-      acceptance.pendingIntent.admissionCommand.semanticIdentity,
+      acceptance.acceptedIntent.admissionCommand.semanticIdentity,
       identity,
     )
-      ? acceptedResult(command, acceptance, "envelope")
+      ? this.acceptedResultFor(command, acceptance, "envelope")
       : conflict();
+  }
+
+  private allocateReservationFence(
+    conversationId: ConversationId,
+  ): ApplicationAppendReservationFence {
+    this.laneGeneration += 1n;
+    const generation = uint63FromBigInt(this.laneGeneration);
+    const token = sha256Bytes(
+      utf8(FICTIONAL_FENCE_TOKEN_DOMAIN),
+      canonicalLengthPrefixed(utf8(generation), utf8(conversationId)),
+    );
+    return parseApplicationAppendReservationFence({ generation, token });
+  }
+
+  private signingRequestFor(
+    pending: PendingApplicationAppendIntent,
+    invocation: DeliveryInvocationContext,
+  ): DeliveryCheckpointSigningRequest {
+    const envelope = pending.envelope;
+    return Object.freeze({
+      profile: "delivery-log-checkpoint.v1" as const,
+      realmId: parseDeliveryRealmId(pending.admissionCommand.realmId),
+      conversationGeneration: pending.priorSnapshot.conversation.generation,
+      releaseProfileId: pending.admissionCommand.releaseProfileId,
+      releaseTrustRootDigest: pending.admissionCommand.releaseTrustRootDigest,
+      conversationId: envelope.conversationId,
+      position: envelope.position,
+      previousHeadHash: envelope.previousHeadHash,
+      headHash: envelope.headHash,
+      signingKeyId: envelope.logSigningKeyId,
+      checkpointDigest: envelope.logCheckpointDigest,
+      checkpointReceivedAt: envelope.receivedAt,
+      pendingIntentDigest: pending.intentDigest,
+      reservationFence: pending.reservationFence,
+      pendingExpiresAt: pending.pendingExpiresAt,
+      admissionStartedAt: pending.admissionStartedAt,
+      invocationStartedAt: invocation.invocationStartedAt,
+      deadline: invocation.deadline,
+      signal: invocation.signal,
+    });
+  }
+
+  private fenceRecordsAt(
+    conversationId: ConversationId,
+    position: Uint63String,
+  ): SignerFenceRecord[] {
+    const key = signerFenceKey(conversationId, position);
+    let records = this.signerFences.get(key);
+    if (!records) {
+      records = [];
+      this.signerFences.set(key, records);
+    }
+    return records;
+  }
+
+  private validateSigningTuple(request: {
+    readonly conversationId: ConversationId;
+    readonly position: Uint63String;
+    readonly previousHeadHash: Hash32;
+    readonly headHash: Hash32;
+    readonly signingKeyId: SigningKeyId;
+    readonly checkpointDigest: Hash32;
+  }): boolean {
+    return (
+      request.signingKeyId === this.signingKeyId &&
+      request.checkpointDigest ===
+        computeDeliveryLogCheckpointDigest({
+          conversationId: request.conversationId,
+          position: request.position,
+          previousHeadHash: request.previousHeadHash,
+          headHash: request.headHash,
+          signingKeyId: request.signingKeyId,
+        })
+    );
+  }
+
+  private async signExactForLab(
+    request: DeliveryCheckpointSigningRequest,
+  ): Promise<unknown> {
+    if (!this.invocationIsLive(request)) return unavailable("timeout");
+    this.maybeFail("before-signer-call");
+    if (
+      request.profile !== "delivery-log-checkpoint.v1" ||
+      !this.validateSigningTuple(request)
+    ) {
+      return unavailable("malformed-dependency-response");
+    }
+    let fence: ApplicationAppendReservationFence;
+    try {
+      fence = parseApplicationAppendReservationFence(request.reservationFence);
+    } catch {
+      return unavailable("malformed-dependency-response");
+    }
+    const fenceTokenHash = computeApplicationAppendFenceTokenHash(fence.token);
+    const records = this.fenceRecordsAt(request.conversationId, request.position);
+    const signedRecord = records.find(
+      (record) => record.resolution.status === "signed",
+    );
+    if (signedRecord) {
+      if (
+        signedRecord.resolution.fenceTokenHash !== fenceTokenHash ||
+        signedRecord.resolution.checkpointDigest !== request.checkpointDigest
+      ) {
+        return unavailable("malformed-dependency-response");
+      }
+      signedRecord.callCount += 1;
+      this.maybeFail("after-signer-call");
+      return signedRecord.resolution;
+    }
+    const own = records.find(
+      (record) => record.resolution.fenceTokenHash === fenceTokenHash,
+    );
+    if (own) {
+      own.callCount += 1;
+      this.maybeFail("after-signer-call");
+      return own.resolution;
+    }
+    if (this.nowValue >= request.pendingExpiresAt) {
+      return unavailable("malformed-dependency-response");
+    }
+    const checkpointSignature = parseEd25519Signature(
+      signEd25519(
+        null,
+        Buffer.from(request.checkpointDigest, "base64url"),
+        FICTIONAL_DELIVERY_LAB_PRIVATE_KEY,
+      ).toString("base64url"),
+    );
+    const signedAt =
+      this.nowValue < request.checkpointReceivedAt
+        ? request.checkpointReceivedAt
+        : this.nowValue;
+    const resolution = this.buildFenceResolution(request, fence, {
+      status: "signed",
+      checkpointSignature,
+      signedAt,
+    });
+    records.push({ resolution, callCount: 1 });
+    this.maybeFail("after-signer-call");
+    return resolution;
+  }
+
+  private async resolveOrCancelForLab(
+    request: ApplicationAppendSignerFenceResolutionRequest,
+  ): Promise<unknown> {
+    if (!this.invocationIsLive(request)) return unavailable("timeout");
+    this.maybeFail("before-signer-call");
+    if (
+      request.profile !== "application-append-signer-fence-resolution.v1" ||
+      !this.validateSigningTuple(request)
+    ) {
+      return unavailable("malformed-dependency-response");
+    }
+    let fence: ApplicationAppendReservationFence;
+    try {
+      fence = parseApplicationAppendReservationFence(request.reservationFence);
+    } catch {
+      return unavailable("malformed-dependency-response");
+    }
+    const fenceTokenHash = computeApplicationAppendFenceTokenHash(fence.token);
+    const records = this.fenceRecordsAt(request.conversationId, request.position);
+    const own = records.find(
+      (record) => record.resolution.fenceTokenHash === fenceTokenHash,
+    );
+    if (own) {
+      own.callCount += 1;
+      this.maybeFail("after-signer-call");
+      return own.resolution;
+    }
+    if (this.nowValue < request.pendingExpiresAt) {
+      return unavailable("malformed-dependency-response");
+    }
+    const resolution = this.buildFenceResolution(request, fence, {
+      status: "cancelled",
+      cancellationStatus: "irreversible-cancelled",
+      cancelledAt: this.nowValue,
+    });
+    records.push({ resolution, callCount: 1 });
+    this.maybeFail("after-signer-call");
+    return resolution;
+  }
+
+  private buildFenceResolution(
+    request: Omit<DeliveryCheckpointSigningRequest, "profile"> & {
+      profile: string;
+    },
+    fence: ApplicationAppendReservationFence,
+    statusPart:
+      | {
+          status: "signed";
+          checkpointSignature: Ed25519Signature;
+          signedAt: Rfc3339Millis;
+        }
+      | {
+          status: "cancelled";
+          cancellationStatus: "irreversible-cancelled";
+          cancelledAt: Rfc3339Millis;
+        },
+  ): ApplicationAppendSignerFenceResolution {
+    const common = {
+      profile: "application-append-signer-fence-resolution.v1" as const,
+      realmId: request.realmId,
+      conversationGeneration: request.conversationGeneration,
+      releaseProfileId: request.releaseProfileId,
+      releaseTrustRootDigest: request.releaseTrustRootDigest,
+      conversationId: request.conversationId,
+      position: request.position,
+      previousHeadHash: request.previousHeadHash,
+      headHash: request.headHash,
+      signingKeyId: request.signingKeyId,
+      checkpointDigest: request.checkpointDigest,
+      checkpointReceivedAt: request.checkpointReceivedAt,
+      pendingIntentDigest: request.pendingIntentDigest,
+      fenceGeneration: fence.generation,
+      fenceTokenHash: computeApplicationAppendFenceTokenHash(fence.token),
+      pendingExpiresAt: request.pendingExpiresAt,
+      admissionStartedAt: request.admissionStartedAt,
+      fenceRecordKeyProfile:
+        "application-append-fence-record-ed25519.v1" as const,
+      fenceRecordSigningKeyId: this.signingKeyId,
+    };
+    const fenceRecordDigest = computeApplicationAppendSignerFenceRecordDigest({
+      ...common,
+      ...statusPart,
+    } as ApplicationAppendSignerFenceResolution);
+    const fenceRecordSignature = parseEd25519Signature(
+      signEd25519(
+        null,
+        Buffer.from(fenceRecordDigest, "base64url"),
+        FICTIONAL_DELIVERY_LAB_PRIVATE_KEY,
+      ).toString("base64url"),
+    );
+    return Object.freeze({
+      ...common,
+      fenceRecordDigest,
+      fenceRecordSignature,
+      ...statusPart,
+    }) as ApplicationAppendSignerFenceResolution;
+  }
+
+  private async verifySignerFenceEvidence(
+    request: ApplicationAppendSignerFenceEvidenceVerificationRequest,
+  ): Promise<unknown> {
+    if (!this.invocationIsLive(request)) return unavailable("timeout");
+    const resolution = request.resolution;
+    try {
+      if (
+        request.profile !== "application-append-signer-fence-evidence.v1" ||
+        resolution.fenceRecordKeyProfile !==
+          "application-append-fence-record-ed25519.v1" ||
+        resolution.fenceRecordSigningKeyId !== this.signingKeyId ||
+        resolution.fenceRecordDigest !==
+          computeApplicationAppendSignerFenceRecordDigest(resolution) ||
+        !verifyEd25519(
+          null,
+          Buffer.from(resolution.fenceRecordDigest, "base64url"),
+          FICTIONAL_DELIVERY_LAB_PUBLIC_KEY,
+          Buffer.from(resolution.fenceRecordSignature, "base64url"),
+        )
+      ) {
+        return unavailable("malformed-dependency-response");
+      }
+    } catch {
+      return unavailable("malformed-dependency-response");
+    }
+    const resolutionStatus =
+      resolution.status === "signed"
+        ? ("signed" as const)
+        : ("irreversible-cancelled" as const);
+    const fenceRecordSignatureSha256 = sha256Bytes(
+      Buffer.from(resolution.fenceRecordSignature, "base64url"),
+    );
+    return Object.freeze({
+      profile: "application-append-signer-fence-evidence.v1",
+      status: "verified",
+      resolutionStatus,
+      pendingIntentDigest: resolution.pendingIntentDigest,
+      fenceGeneration: resolution.fenceGeneration,
+      fenceTokenHash: resolution.fenceTokenHash,
+      fenceRecordKeyProfile: resolution.fenceRecordKeyProfile,
+      fenceRecordDigest: resolution.fenceRecordDigest,
+      fenceRecordSigningKeyId: resolution.fenceRecordSigningKeyId,
+      fenceRecordSignatureSha256,
+      verifiedAt: request.verifiedAt,
+      keyStatus: "trusted-for-record",
+      recordSignatureStatus: "verified",
+      evidenceDigest: computeApplicationAppendSignerFenceVerificationEvidenceDigest({
+        resolution,
+        resolutionStatus,
+        fenceRecordSignatureSha256,
+        verifiedAt: request.verifiedAt,
+      }),
+    });
   }
 
   private async inspectMlsWire(
@@ -924,64 +1453,6 @@ export class InMemoryDeliveryLabStore
       profile: "conversation-policy-head-proof.v1",
       ...evidence,
       evidenceDigest: computePolicyHeadProofEvidenceDigest(evidence),
-    });
-  }
-
-  private async signCheckpointForLab(
-    request: DeliveryCheckpointSigningRequest,
-  ): Promise<unknown> {
-    if (!this.invocationIsLive(request)) return unavailable("timeout");
-    this.maybeFail("before-signer-call");
-    if (
-      request.profile !== "delivery-log-checkpoint.v1" ||
-      request.signingKeyId !== this.signingKeyId ||
-      request.checkpointDigest !==
-        computeDeliveryLogCheckpointDigest({
-          conversationId: request.conversationId,
-          position: request.position,
-          previousHeadHash: request.previousHeadHash,
-          headHash: request.headHash,
-          signingKeyId: request.signingKeyId,
-        })
-    ) {
-      return unavailable("malformed-dependency-response");
-    }
-    const fenceKey = signerFenceKey(request.conversationId, request.position);
-    const existing = this.signerFences.get(fenceKey);
-    if (existing && existing.checkpointDigest !== request.checkpointDigest) {
-      return unavailable("malformed-dependency-response");
-    }
-    const signature =
-      existing?.signature ??
-      parseEd25519Signature(
-        signEd25519(
-          null,
-          Buffer.from(request.checkpointDigest, "base64url"),
-          FICTIONAL_DELIVERY_LAB_PRIVATE_KEY,
-        ).toString("base64url"),
-      );
-    if (existing) {
-      existing.callCount += 1;
-    } else {
-      this.signerFences.set(fenceKey, {
-        conversationId: request.conversationId,
-        position: request.position,
-        checkpointDigest: request.checkpointDigest,
-        signature,
-        callCount: 1,
-      });
-    }
-    this.maybeFail("after-signer-call");
-    return Object.freeze({
-      status: "signed",
-      profile: "delivery-log-checkpoint.v1",
-      conversationId: request.conversationId,
-      position: request.position,
-      previousHeadHash: request.previousHeadHash,
-      headHash: request.headHash,
-      signingKeyId: request.signingKeyId,
-      checkpointDigest: request.checkpointDigest,
-      signature,
     });
   }
 
@@ -1091,20 +1562,18 @@ export class InMemoryDeliveryLabStore
     }
   }
 
-  private fanOutEligibleRecipients(
+  private fanOutPlannedRecipients(
     database: LabDatabase,
+    plan: ApplicationAppendFanoutPlan,
     envelope: StoredApplicationEnvelope,
   ): void {
-    for (const projection of [...this.recipientProjections].sort((left, right) =>
-      left.installationId.localeCompare(right.installationId),
-    )) {
-      if (!recipientEligibleAt(projection, envelope.position)) continue;
-      const entries = database.mailboxes.get(projection.installationId);
+    for (const installationId of plan.recipientInstallationIds) {
+      const entries = database.mailboxes.get(installationId);
       if (!entries) throw new TypeError("Authoritative mailbox disappeared.");
       entries.push(
         Object.freeze({
           mailboxPosition: uint63FromBigInt(BigInt(entries.length + 1)),
-          installationId: projection.installationId,
+          installationId,
           envelope,
         }),
       );
@@ -1117,7 +1586,7 @@ export class InMemoryDeliveryLabStore
       this.recipientProjections.some(
         (projection) =>
           projection.conversationId !== conversation.conversationId ||
-          projection.rosterVersion !== conversation.rosterVersion,
+          projection.recipientSetVersion !== conversation.recipientSetVersion,
       )
     ) {
       throw new TypeError("Recipient projections are not the current roster.");
@@ -1282,6 +1751,211 @@ export class InMemoryDeliveryLabStore
       release();
     }
   }
+
+  private pendingResultFor(
+    command: AtomicApplicationAppendCommand,
+    pendingIntent: PendingApplicationAppendIntent,
+    replay: "none" | "http" | "envelope",
+  ) {
+    return Object.freeze({
+      status: "pending",
+      replay,
+      invocationCommandDigest:
+        computeAtomicApplicationAppendCommandDigest(command),
+      pendingIntent,
+      reservedAt: this.database.pendingReservedAt ?? this.nowValue,
+      observedAt: this.nowValue,
+    });
+  }
+
+  private blockedByPendingResultFor(
+    command: AtomicApplicationAppendCommand,
+    pendingIntent: PendingApplicationAppendIntent,
+  ) {
+    return Object.freeze({
+      status: "blocked-by-pending",
+      invocationCommandDigest:
+        computeAtomicApplicationAppendCommandDigest(command),
+      pendingIntent,
+      reservedAt: this.database.pendingReservedAt ?? this.nowValue,
+      observedAt: this.nowValue,
+    });
+  }
+
+  private retiredResultFor(
+    command: AtomicApplicationAppendCommand,
+    pendingIntentDigest: Hash32,
+    retiredAt: Rfc3339Millis,
+  ) {
+    return Object.freeze({
+      status: "retired",
+      invocationCommandDigest:
+        computeAtomicApplicationAppendCommandDigest(command),
+      pendingIntentDigest,
+      retiredAt,
+      observedAt: this.nowValue,
+    });
+  }
+
+  private acceptedResultFor(
+    command: AtomicApplicationAppendCommand,
+    acceptance: StoredAcceptance,
+    replay: "none" | "http" | "envelope" | "blocked",
+  ) {
+    return Object.freeze({
+      status: "accepted",
+      replay,
+      invocationCommandDigest:
+        computeAtomicApplicationAppendCommandDigest(command),
+      acceptedIntent: acceptance.acceptedIntent,
+      envelope: acceptance.envelope,
+      receipt: acceptance.receipt,
+      signatureEvidence: acceptance.signatureEvidence,
+      signerFenceEvidence: acceptance.signerFenceEvidence,
+      fanoutEvidence: acceptance.fanoutEvidence,
+      finalizedAt: acceptance.finalizedAt,
+      observedAt: this.nowValue,
+    });
+  }
+}
+
+function signerFenceExpectationFor(
+  pending: PendingApplicationAppendIntent,
+): ApplicationAppendSignerFenceResolutionExpectation {
+  const envelope = pending.envelope;
+  return Object.freeze({
+    realmId: parseDeliveryRealmId(pending.admissionCommand.realmId),
+    conversationGeneration: pending.priorSnapshot.conversation.generation,
+    releaseProfileId: pending.admissionCommand.releaseProfileId,
+    releaseTrustRootDigest: pending.admissionCommand.releaseTrustRootDigest,
+    conversationId: envelope.conversationId,
+    position: envelope.position,
+    previousHeadHash: envelope.previousHeadHash,
+    headHash: envelope.headHash,
+    signingKeyId: envelope.logSigningKeyId,
+    checkpointDigest: envelope.logCheckpointDigest,
+    checkpointReceivedAt: envelope.receivedAt,
+    pendingIntentDigest: pending.intentDigest,
+    fenceGeneration: pending.reservationFence.generation,
+    fenceTokenHash: computeApplicationAppendFenceTokenHash(
+      pending.reservationFence.token,
+    ),
+    pendingExpiresAt: pending.pendingExpiresAt,
+    admissionStartedAt: pending.admissionStartedAt,
+  });
+}
+
+/**
+ * Computes and validates the exact quota-capacity conversion for finalizing
+ * or releasing one pending append. The lab keeps reserved capacity inside the
+ * pending intent, so the conversion always starts from postReservationQuotas.
+ */
+function convertQuotaCapacity(
+  pending: PendingApplicationAppendIntent,
+  mode: "finalize" | "release",
+): readonly LockedQuotaCounter[] {
+  const reservations = pending.commitProjection.quotaCapacityReservations;
+  const preparedFinalQuotas = pending.postReservationQuotas.map((quota) => {
+    const reservation = reservations.find(
+      ({ scope }) => scope === quota.scope,
+    );
+    if (!reservation) {
+      throw new TypeError("Quota reservation scope disappeared in the lab.");
+    }
+    return Object.freeze({
+      ...quota,
+      operationCount:
+        mode === "finalize"
+          ? uint63FromBigInt(
+              BigInt(quota.operationCount) +
+                BigInt(reservation.reservationOperationCount),
+            )
+          : quota.operationCount,
+      byteCount:
+        mode === "finalize"
+          ? uint63FromBigInt(
+              BigInt(quota.byteCount) + BigInt(reservation.reservationByteCount),
+            )
+          : quota.byteCount,
+      reservedOperationCount: uint63FromBigInt(
+        BigInt(quota.reservedOperationCount) -
+          BigInt(reservation.reservationOperationCount),
+      ),
+      reservedByteCount: uint63FromBigInt(
+        BigInt(quota.reservedByteCount) -
+          BigInt(reservation.reservationByteCount),
+      ),
+      rowVersion: uint63FromBigInt(BigInt(quota.rowVersion) + 1n),
+    });
+  });
+  const terminalState = mode === "finalize" ? "consumed" : "released";
+  const preparedFinalReservations: readonly ApplicationAppendQuotaCapacityReservation[] =
+    reservations.map((reservation) =>
+      Object.freeze({ ...reservation, state: terminalState as "consumed" | "released" }),
+    );
+  const input = {
+    currentQuotas: pending.postReservationQuotas,
+    currentCapacityReservations: reservations,
+    pendingPreparationDigest: pending.preparationDigest,
+    fenceGeneration: pending.reservationFence.generation,
+    fenceTokenHash: computeApplicationAppendFenceTokenHash(
+      pending.reservationFence.token,
+    ),
+    preparedFinalQuotas,
+    preparedFinalReservations,
+  };
+  const conversion =
+    mode === "finalize"
+      ? validateLockedApplicationAppendQuotaFinalizationTransition(input)
+      : validateLockedApplicationAppendQuotaReleaseTransition(input);
+  return conversion.quotas;
+}
+
+function buildFanoutEvidence(
+  plan: ApplicationAppendFanoutPlan,
+  envelope: StoredApplicationEnvelope,
+): ApplicationAppendFanoutEvidence {
+  const mailboxProjectionDigest = computeApplicationAppendMailboxProjectionDigest({
+    plan,
+    envelopeId: envelope.envelopeId,
+  });
+  const outboxProjectionDigest = computeApplicationAppendOutboxProjectionDigest({
+    conversationId: envelope.conversationId,
+    envelopeId: envelope.envelopeId,
+    position: envelope.position,
+    headHash: envelope.headHash,
+  });
+  return parseApplicationAppendFanoutEvidence(
+    {
+      profile: "application-append-fanout.v1",
+      status: "committed",
+      conversationId: envelope.conversationId,
+      envelopeId: envelope.envelopeId,
+      position: envelope.position,
+      headHash: envelope.headHash,
+      rosterHash: plan.rosterHash,
+      planDigest: plan.planDigest,
+      recipientCount: plan.recipientCount,
+      mailboxProjectionDigest,
+      outboxProjectionDigest,
+      evidenceDigest: computeApplicationAppendFanoutEvidenceDigest({
+        conversationId: envelope.conversationId,
+        envelopeId: envelope.envelopeId,
+        position: envelope.position,
+        headHash: envelope.headHash,
+        rosterHash: plan.rosterHash,
+        planDigest: plan.planDigest,
+        recipientCount: plan.recipientCount,
+        mailboxProjectionDigest,
+        outboxProjectionDigest,
+      }),
+    },
+    {
+      plan,
+      envelopeId: envelope.envelopeId,
+      headHash: envelope.headHash,
+    },
+  );
 }
 
 function parseLabSeed(value: unknown): ParsedLabSeed {
@@ -1296,6 +1970,7 @@ function parseLabSeed(value: unknown): ParsedLabSeed {
       "signingKeyValidFrom",
       "signingKeyValidUntil",
       "recipientProjections",
+      "mlsRosterProjections",
       "attachments",
     ],
     "fictional in-memory delivery lab seed",
@@ -1312,33 +1987,54 @@ function parseLabSeed(value: unknown): ParsedLabSeed {
   if (signingKeyValidUntil <= signingKeyValidFrom) {
     throw new TypeError("Fictional signing-key window is invalid.");
   }
-  const recipientProjections = parseDataArray(
+  const recipientProjections = parseApplicationAppendRecipientProjections(
     record.recipientProjections,
-    "recipientProjections",
-  ).map((entry, index) => parseRecipientProjection(entry, index));
+    seedArrayCeiling(record.recipientProjections, "recipientProjections"),
+  );
+  const mlsRosterProjections = parseApplicationAppendMlsRosterProjections(
+    record.mlsRosterProjections,
+    seedArrayCeiling(record.mlsRosterProjections, "mlsRosterProjections"),
+  );
+  const conversation = snapshot.conversation;
   if (
-    new Set(recipientProjections.map(({ installationId }) => installationId))
-      .size !== recipientProjections.length ||
+    computeApplicationAppendRecipientSetHash(recipientProjections) !==
+      conversation.recipientSetHash ||
+    computeApplicationAppendMlsRosterHash(mlsRosterProjections) !==
+      conversation.rosterHash ||
     recipientProjections.some(
       (projection) =>
-        projection.conversationId !== snapshot.conversation.conversationId ||
-        projection.rosterVersion !== snapshot.conversation.rosterVersion,
+        projection.conversationId !== conversation.conversationId ||
+        projection.conversationGeneration !== conversation.generation ||
+        projection.recipientSetVersion !== conversation.recipientSetVersion,
+    ) ||
+    mlsRosterProjections.some(
+      (projection) =>
+        projection.conversationId !== conversation.conversationId ||
+        projection.conversationGeneration !== conversation.generation ||
+        projection.rosterVersion !== conversation.rosterVersion,
     )
   ) {
     throw new TypeError("Fictional recipient roster is duplicated or stale.");
   }
+  const membership = snapshot.membership;
   const senderProjection = recipientProjections.find(
-    ({ installationId }) =>
-      installationId === snapshot.membership.installationId,
+    ({ installationId }) => installationId === membership.installationId,
   );
   if (
     !senderProjection ||
-    senderProjection.conversationId !== snapshot.membership.conversationId ||
-    senderProjection.rosterVersion !== snapshot.conversation.rosterVersion ||
+    senderProjection.conversationId !== membership.conversationId ||
+    senderProjection.accountId !== membership.accountId ||
+    senderProjection.credentialId !== membership.credentialId ||
+    senderProjection.credentialFingerprint !==
+      membership.credentialFingerprint ||
+    senderProjection.credentialRevocationVersion !==
+      membership.credentialRevocationVersion ||
+    senderProjection.credentialState !== membership.credentialState ||
+    senderProjection.credentialExpiresAt !== membership.credentialExpiresAt ||
     senderProjection.installationState !==
-      snapshot.membership.installationState ||
-    senderProjection.joinedPosition !== snapshot.membership.joinedPosition ||
-    senderProjection.removedPosition !== snapshot.membership.removedPosition
+      membership.installationState ||
+    senderProjection.joinedPosition !== membership.joinedPosition ||
+    senderProjection.removedPosition !== membership.removedPosition
   ) {
     throw new TypeError(
       "Fictional recipient roster must exactly project the locked sender membership.",
@@ -1361,56 +2057,18 @@ function parseLabSeed(value: unknown): ParsedLabSeed {
     signingKeyId: parseSigningKeyId(record.signingKeyId),
     signingKeyValidFrom,
     signingKeyValidUntil,
-    recipientProjections: Object.freeze(recipientProjections),
+    recipientProjections,
+    mlsRosterProjections,
     attachments: Object.freeze(attachments),
   });
 }
 
-function parseRecipientProjection(
-  value: unknown,
-  index: number,
-): LabRecipientProjection {
-  const record = expectExactRecord(
-    value,
-    [
-      "conversationId",
-      "installationId",
-      "rosterVersion",
-      "installationState",
-      "joinedPosition",
-      "removedPosition",
-    ],
-    `fictional recipient projection ${index}`,
-  );
-  if (
-    record.installationState !== "active" &&
-    record.installationState !== "suspended" &&
-    record.installationState !== "revoked"
-  ) {
-    throw new TypeError("Fictional recipient state is unsupported.");
+function seedArrayCeiling(value: unknown, label: string): Uint63String {
+  const entries = parseDataArray(value, label);
+  if (entries.length === 0) {
+    throw new TypeError(`Fictional recipient roster ${label} cannot be empty.`);
   }
-  const joinedPosition = parseUint63String(record.joinedPosition);
-  if (joinedPosition === "0") {
-    throw new TypeError("Fictional recipient join position must be positive.");
-  }
-  const removedPosition =
-    record.removedPosition === null
-      ? null
-      : parseUint63String(record.removedPosition);
-  if (
-    removedPosition !== null &&
-    BigInt(removedPosition) < BigInt(joinedPosition)
-  ) {
-    throw new TypeError("Fictional recipient removal predates its join.");
-  }
-  return Object.freeze({
-    conversationId: parseConversationId(record.conversationId),
-    installationId: parseInstallationId(record.installationId),
-    rosterVersion: parseUint63String(record.rosterVersion),
-    installationState: record.installationState,
-    joinedPosition,
-    removedPosition,
-  });
+  return parseUint63String(String(entries.length));
 }
 
 function parseLabAttachment(value: unknown, index: number): LabAttachment {
@@ -1535,23 +2193,6 @@ function checkpointVerificationRequest(
   });
 }
 
-function acceptedResult(
-  command: AtomicApplicationAppendCommand,
-  acceptance: StoredAcceptance,
-  replay: "none" | "http" | "envelope",
-) {
-  return Object.freeze({
-    status: "accepted",
-    replay,
-    invocationCommandDigest:
-      computeAtomicApplicationAppendCommandDigest(command),
-    pendingIntent: acceptance.pendingIntent,
-    envelope: acceptance.envelope,
-    receipt: acceptance.receipt,
-    signatureEvidence: acceptance.signatureEvidence,
-  });
-}
-
 function commandTrustMatchesSnapshot(
   command: AtomicApplicationAppendCommand,
   snapshot: LockedApplicationAppendSnapshot,
@@ -1565,20 +2206,6 @@ function commandTrustMatchesSnapshot(
   );
 }
 
-function pendingResult(
-  command: AtomicApplicationAppendCommand,
-  pendingIntent: PendingApplicationAppendIntent,
-  replay: "none" | "http" | "envelope",
-) {
-  return Object.freeze({
-    status: "pending",
-    replay,
-    invocationCommandDigest:
-      computeAtomicApplicationAppendCommandDigest(command),
-    pendingIntent,
-  });
-}
-
 function rejected(
   reasonCode:
     | "conversation-not-found"
@@ -1589,8 +2216,8 @@ function rejected(
   return Object.freeze({ status: "rejected", reasonCode });
 }
 
-function retry(reasonCode: "pending-other" | "snapshot-changed") {
-  return Object.freeze({ status: "retry", reasonCode });
+function retry() {
+  return Object.freeze({ status: "retry", reasonCode: "snapshot-changed" });
 }
 
 function conflict() {
@@ -1620,7 +2247,7 @@ function httpIdempotencyScope(command: AtomicApplicationAppendCommand): string {
     "/v1/conversations/{conversationId}/envelopes",
     identity.conversationId,
     command.idempotencyKey,
-  ].join("\u0000");
+  ].join(" ");
 }
 
 function semanticEnvelopeKey(
@@ -1628,18 +2255,18 @@ function semanticEnvelopeKey(
   conversationId: ConversationId,
   envelopeId: EnvelopeId,
 ): string {
-  return `${realmId}\u0000${conversationId}\u0000${envelopeId}`;
+  return `${realmId} ${conversationId} ${envelopeId}`;
 }
 
 function signerFenceKey(
   conversationId: ConversationId,
   position: Uint63String,
 ): string {
-  return `${conversationId}\u0000${position}`;
+  return `${conversationId} ${position}`;
 }
 
 function recipientEligibleAt(
-  projection: LabRecipientProjection,
+  projection: ApplicationAppendRecipientProjection,
   position: Uint63String,
 ): boolean {
   return (
@@ -1666,6 +2293,7 @@ function cloneDatabase(database: LabDatabase): LabDatabase {
   return {
     snapshot: cloneSnapshot(database.snapshot),
     pending: database.pending,
+    pendingReservedAt: database.pendingReservedAt,
     envelopes: [...database.envelopes],
     mailboxes: new Map(
       [...database.mailboxes].map(([installationId, entries]) => [
@@ -1727,6 +2355,10 @@ function isThenable(value: unknown): boolean {
     current = Object.getPrototypeOf(current) as object | null;
   }
   return false;
+}
+
+function utf8(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
 }
 
 export function verifyFictionalDeliveryLabReceiptSignatureForTesting(

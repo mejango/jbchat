@@ -48,14 +48,8 @@ import {
 } from "./ports";
 import {
   bindApplicationAppendQuotaCapacityReservations,
-  computeApplicationAppendFanoutEvidenceDigest,
-  computeApplicationAppendFanoutPlanDigest,
-  computeApplicationAppendMailboxProjectionDigest,
-  computeApplicationAppendMlsRosterHash,
-  computeApplicationAppendOutboxProjectionDigest,
   computeApplicationAppendPendingExpiresAt,
   computeApplicationAppendQuotaReservationSetDigest,
-  computeApplicationAppendRecipientSetHash,
   computeDeliveryLimitsDigest,
   computeLockedApplicationAppendSnapshotDigest,
   deriveApplicationAppendFanoutPlan,
@@ -64,7 +58,6 @@ import {
   parseApplicationAppendFanoutEvidence,
   parseApplicationAppendFanoutPlan,
   parseApplicationAppendMlsRosterProjections,
-  parseApplicationAppendQuotaCapacityReservations,
   parseApplicationAppendRecipientProjections,
   parseApplicationAppendRejectionReason,
   parseLockedApplicationAppendCommitProjection,
@@ -77,7 +70,6 @@ import {
   type ApplicationAppendFanoutEvidence,
   type ApplicationAppendFanoutPlan,
   type ApplicationAppendMlsRosterProjection,
-  type ApplicationAppendQuotaCapacityReservation,
   type ApplicationAppendQuotaCapacityDelta,
   type ApplicationAppendRecipientProjection,
   type ApplicationAppendRejectionReason,
@@ -510,6 +502,13 @@ export function createApplicationEnvelopeDeliveryService(
             await Promise.resolve();
             continue;
           }
+          if (
+            preflight.status === "conflict" ||
+            preflight.status === "rejected" ||
+            preflight.status === "unavailable"
+          ) {
+            return preflight;
+          }
           if (preflight.status !== "miss") return malformedDependency();
           const preflightCompletedAt = readClockNow(ports);
           if (isUnavailable(preflightCompletedAt)) return preflightCompletedAt;
@@ -692,6 +691,13 @@ export function createApplicationEnvelopeDeliveryService(
           if (reservation.status === "retry") {
             await Promise.resolve();
             continue;
+          }
+          if (
+            reservation.status === "conflict" ||
+            reservation.status === "rejected" ||
+            reservation.status === "unavailable"
+          ) {
+            return reservation;
           }
           if (
             reservation.status === "miss"

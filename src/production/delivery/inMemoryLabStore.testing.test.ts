@@ -27,10 +27,13 @@ import {
   type DeliveryLabFailpoint,
   verifyFictionalDeliveryLabReceiptSignatureForTesting,
 } from "./inMemoryLabStore.testing";
+import { parseApplicationAppendReservationFence } from "./ports";
 import { createApplicationEnvelopeDeliveryService } from "./service";
+import { parseDeliveryRealmId } from "./sync";
 import {
   ZERO_HASH32,
   parseHash32,
+  parseReleaseProfileId,
   parseRfc3339Millis,
   parseUint63String,
 } from "./valueObjects";
@@ -410,14 +413,27 @@ describe("fictional pre-G1 in-memory delivery lab", () => {
       signingKeyId: accepted.receipt.logHead.signingKeyId,
     });
     const controller = new AbortController();
-    const result = await store.productionPorts.checkpointSigner.sign({
+    const result = await store.productionPorts.checkpointSigner.signExact({
       profile: "delivery-log-checkpoint.v1",
+      realmId: parseDeliveryRealmId("fictional-lab"),
+      conversationGeneration: parseUint63String("1"),
+      releaseProfileId: parseReleaseProfileId("fictional-release.v1"),
+      releaseTrustRootDigest: parseHash32(hash(8)),
       conversationId: accepted.receipt.conversationId,
       position: accepted.receipt.position,
       previousHeadHash: accepted.receipt.logHead.previousHeadHash,
       headHash: differentHead,
       signingKeyId: accepted.receipt.logHead.signingKeyId,
       checkpointDigest: differentDigest,
+      checkpointReceivedAt: parseRfc3339Millis(LAB_NOW),
+      pendingIntentDigest: parseHash32(hash(52)),
+      reservationFence: parseApplicationAppendReservationFence({
+        generation: "9",
+        token: hash(53),
+      }),
+      pendingExpiresAt: parseRfc3339Millis("2026-08-14T16:21:15.123Z"),
+      admissionStartedAt: parseRfc3339Millis(LAB_NOW),
+      invocationStartedAt: parseRfc3339Millis(LAB_NOW),
       deadline: parseRfc3339Millis("2026-08-14T16:21:00.000Z"),
       signal: controller.signal,
     });
@@ -465,19 +481,13 @@ describe("fictional pre-G1 in-memory delivery lab", () => {
   });
 
   it("fans out only within authoritative recipient windows and syncs private mailboxes", async () => {
-    const baseSeed = fictionalDeliveryLabSeed();
-    const sender = baseSeed.recipientProjections[0]!;
-    const always = baseSeed.recipientProjections[1]!;
-    const store = new InMemoryDeliveryLabStore({
-      ...baseSeed,
-      recipientProjections: [
-        sender,
-        always,
-        recipient(ACTIVE_REMOVED_INSTALLATION_ID, "active", "1", "2"),
-        recipient(PREJOIN_INSTALLATION_ID, "active", "3", null),
-        recipient(SUSPENDED_INSTALLATION_ID, "suspended", "1", null),
-      ],
-    });
+    const store = new InMemoryDeliveryLabStore(
+      fictionalDeliveryLabSeed(fictionalDeliveryLimits(), [
+        member(ACTIVE_REMOVED_INSTALLATION_ID, "active", "1", "2", 70),
+        member(PREJOIN_INSTALLATION_ID, "active", "3", null, 71),
+        member(SUSPENDED_INSTALLATION_ID, "suspended", "1", null, 72),
+      ]),
+    );
     const service = serviceFor(store);
     await service.appendApplicationEnvelope(fictionalAppendRequest());
     await service.appendApplicationEnvelope(
@@ -516,7 +526,7 @@ describe("fictional pre-G1 in-memory delivery lab", () => {
       const sender = seed.recipientProjections[0]!;
       const replacement =
         kind === "stale"
-          ? { ...sender, rosterVersion: "27" }
+          ? { ...sender, recipientSetVersion: "0" }
           : kind === "suspended"
             ? { ...sender, installationState: "suspended" }
             : { ...sender, removedPosition: "2" };
@@ -597,19 +607,21 @@ function expectCommittedOnce(
   expect(state.boundAttachmentCount).toBe(attachmentBound ? 1 : 0);
 }
 
-function recipient(
+function member(
   installationId: string,
   installationState: "active" | "suspended" | "revoked",
   joinedPosition: string,
   removedPosition: string | null,
+  identityByte: number,
 ) {
   return {
-    conversationId: LAB_CONVERSATION_ID,
+    accountId: `${identityByte}94c690-2af4-4a45-a7cc-9d85ce6cbd26`,
     installationId,
-    rosterVersion: "28",
-    installationState,
+    credentialId: `${identityByte}c82f16-bf3c-45e0-8518-ca1bf6ab3b66`,
+    credentialFingerprint: hash(identityByte),
     joinedPosition,
     removedPosition,
+    installationState,
   };
 }
 
