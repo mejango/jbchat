@@ -906,6 +906,30 @@ async function main() {
       "the device enrollment and session suite must pass",
     );
 
+    // Runs alone: it flips the shared conversation through membership_pending
+    // and must not race any suite that reconstructs the append snapshot.
+    console.error("Running the membership intent suite...");
+    const membershipSuite = run(
+      "npx",
+      [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.storage.config.ts",
+        "src/production/storage/membershipIntent.pgtest.ts",
+      ],
+      {
+        env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
+        stdio: ["ignore", "inherit", "inherit"],
+        encoding: undefined,
+      },
+    );
+    assert.equal(
+      membershipSuite.status,
+      0,
+      "the membership intent suite must pass",
+    );
+
     await runRestoreDrill(labDirectory, port, databaseUrl);
     await runFailoverDrill(labDirectory, dataDirectory, port, databaseUrl);
 
