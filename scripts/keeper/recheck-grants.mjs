@@ -24,7 +24,10 @@ async function blockHashAt(url, heightHex) {
   const id = rpcId;
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "jbm-evm-adapter/1",
+        },
     body: JSON.stringify({
       jsonrpc: "2.0",
       id,

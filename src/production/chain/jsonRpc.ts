@@ -27,7 +27,10 @@ export function createHttpJsonRpcTransport(context: {
       const id = nextId;
       const response = await fetchImplementation(context.url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "jbm-evm-adapter/1",
+        },
         body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS),
       });

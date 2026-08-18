@@ -47,11 +47,27 @@ if (source.kind !== "jbm-deployment-manifest-source.v1") {
 
 let rpcId = 0;
 async function rpc(url, method, params) {
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await rpcOnce(url, method, params);
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+async function rpcOnce(url, method, params) {
   rpcId += 1;
   const id = rpcId;
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+          "Content-Type": "application/json",
+          "User-Agent": "jbm-evm-adapter/1",
+        },
     body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
     signal: AbortSignal.timeout(15000),
   });
