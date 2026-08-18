@@ -22,6 +22,49 @@ const webSecurityHeaderRules = buildWebSecurityHeaderRules(
 const nextConfig: NextConfig = {
   ...(allowedDevOrigins.length > 0 ? { allowedDevOrigins } : {}),
   output: "standalone",
+  // Para dynamically imports optional peers this deployment never uses;
+  // resolve them to empty modules, point Para's wagmi-barrel import at
+  // core, and swap Coinbase's HeartbeatWorker for the vendored copy whose
+  // final line the classic-worker minifier accepts. Mirrors
+  // webclients/juicebox-money/next.config.js - the build must run with
+  // --webpack for these to apply.
+  webpack: (config, { webpack }) => {
+    const empty: string[] = [
+      "@farcaster/miniapp-sdk",
+      "@farcaster/miniapp-wagmi-connector",
+      "@getpara/cosmos-wallet-connectors",
+      "@getpara/evm-wallet-connectors",
+      "@getpara/solana-wallet-connectors",
+      "@x402/core",
+      "@x402/evm",
+      "@x402/svm",
+      "@react-native-async-storage/async-storage",
+      "pino-pretty",
+      ...[
+        "alchemy",
+        "biconomy",
+        "cdp",
+        "gelato",
+        "pimlico",
+        "porto",
+        "rhinestone",
+        "safe",
+        "thirdweb",
+        "zerodev",
+      ].map((provider) => `@getpara/aa-${provider}`),
+    ];
+    for (const specifier of empty) {
+      config.resolve.alias[specifier] = false;
+    }
+    config.resolve.alias["wagmi/connectors$"] = "@wagmi/core";
+    config.plugins.push(
+      new webpack.NormalModuleReplacementPlugin(
+        /[\/]HeartbeatWorker(\.js)?$/,
+        `${appRoot}/src/vendor/HeartbeatWorker.js`,
+      ),
+    );
+    return config;
+  },
   outputFileTracingRoot: appRoot,
   poweredByHeader: false,
   reactStrictMode: true,

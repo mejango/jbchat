@@ -1,6 +1,6 @@
 "use client";
 
-import { MessagingExperience } from "@/components/MessagingDemo";
+import { MessagingExperience } from "@/shared/MessagingDemo";
 import type { ViewerRole } from "@/domain/model";
 import Image from "next/image";
 import Link from "next/link";

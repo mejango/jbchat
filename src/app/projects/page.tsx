@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { ProjectPreviewApp } from "@/projects/ProjectPreviewApp";
 
@@ -8,5 +9,8 @@ export const metadata: Metadata = {
 };
 
 export default function ProjectsPage() {
+  if (process.env.JUICEBOX_MESSAGING_WEB_SECURITY_MODE === "production") {
+    notFound();
+  }
   return <ProjectPreviewApp />;
 }

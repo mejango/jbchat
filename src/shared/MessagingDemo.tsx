@@ -34,8 +34,8 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Icon } from "./Icon";
-import { ShippingDialog } from "./ShippingDialog";
+import { Icon } from "@/components/Icon";
+import { ShippingDialog } from "@/shared/ShippingDialog";
 
 type PendingAction =
   | "send"

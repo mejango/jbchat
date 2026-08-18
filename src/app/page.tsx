@@ -1,5 +1,7 @@
-import { MessagingDemo } from "@/components/MessagingDemo";
+import { MessagingApp } from "@/components/messaging/MessagingApp";
+
+export const dynamic = "force-dynamic";
 
 export default function Home() {
-  return <MessagingDemo />;
+  return <MessagingApp />;
 }

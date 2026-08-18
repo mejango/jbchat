@@ -44,12 +44,21 @@
     "mls:lab": "node scripts/mls/run-bridge-lab.mjs"
   },
   "dependencies": {
+    "@coinbase/wallet-sdk": "^4.3.7",
+    "@getpara/react-sdk-lite": "^3.11.0",
+    "@getpara/wagmi-v2-connector": "^3.11.0",
+    "@getpara/web-sdk": "^3.11.0",
     "@noble/curves": "2.3.0",
+    "@tanstack/react-query": "^5.101.4",
+    "@wagmi/core": "^3.6.4",
+    "@walletconnect/ethereum-provider": "^2.23.10",
     "next": "16.3.1",
     "postgres": "3.4.9",
     "qrcode": "1.5.4",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "viem": "^2.55.8",
+    "wagmi": "^3.7.4"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.12.1",

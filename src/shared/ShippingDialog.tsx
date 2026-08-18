@@ -15,7 +15,7 @@ import type {
   ShippingAddress,
 } from "@/domain/model";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Icon } from "./Icon";
+import { Icon } from "@/components/Icon";
 
 interface ShippingDialogProps {
   open: boolean;

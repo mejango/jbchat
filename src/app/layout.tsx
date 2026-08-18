@@ -1,8 +1,25 @@
 import type { Metadata } from "next";
+import localFont from "next/font/local";
 import { connection } from "next/server";
 import type { ReactNode } from "react";
 import { PwaRegistration } from "@/components/PwaRegistration";
 import "./globals.css";
+import "./family.css";
+
+const beatrice = localFont({
+  src: [
+    { path: "../../public/fonts/Beatrice-Regular.woff2", weight: "400" },
+    { path: "../../public/fonts/Beatrice-Medium.woff2", weight: "500" },
+  ],
+  variable: "--font-beatrice",
+  display: "swap",
+});
+
+const agrandir = localFont({
+  src: [{ path: "../../public/fonts/PPAgrandir-Medium.woff2", weight: "500" }],
+  variable: "--font-agrandir",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Juicebox Messaging",
@@ -16,7 +33,8 @@ export default async function RootLayout({
   await connection();
 
   return (
-    <html lang="en" data-brand="juicebox">
+    <html lang="en" data-brand="juicebox"
+      className={`${beatrice.variable} ${agrandir.variable}`}>
       <body>
         {children}
         <PwaRegistration

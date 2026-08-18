@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { SharedMessagingApp } from "@/shared/SharedMessagingApp";
 
@@ -8,5 +9,8 @@ export const metadata: Metadata = {
 };
 
 export default function SharedPage() {
+  if (process.env.JUICEBOX_MESSAGING_WEB_SECURITY_MODE === "production") {
+    notFound();
+  }
   return <SharedMessagingApp />;
 }
