@@ -22,6 +22,7 @@ import {
   createWitnessCore,
   type WitnessSignerPort,
 } from "./witnessCore";
+import { runDeliverySubmissionPass } from "./submitter";
 
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
 const describeStorage = DATABASE_URL ? describe : describe.skip;
@@ -327,5 +328,69 @@ describeStorage("witness core", () => {
     });
     expect(conflicting.splitView).toBe(true);
     expect(await core.splitViewCount()).toBe(before + 1);
+  });
+
+  it("drains unwitnessed envelopes through the submission pass", async () => {
+    // A fresh witness database so the pass starts from tree size zero.
+    await deliverySql.unsafe("DROP DATABASE IF EXISTS jbm_witness_lab2");
+    await deliverySql.unsafe("CREATE DATABASE jbm_witness_lab2");
+    const witnessUrl2 = DATABASE_URL!.replace(/[^/]+$/, "jbm_witness_lab2");
+    const runner = (await import(
+      // @ts-expect-error the migration runner is intentionally untyped .mjs
+      /* @vite-ignore */ "../../../scripts/storage/migrate.mjs"
+    )) as {
+      migrateStorage: (
+        databaseUrl: string,
+        directory?: string,
+        log?: (message: string) => void,
+      ) => unknown;
+    };
+    runner.migrateStorage(witnessUrl2, WITNESS_MIGRATIONS, () => {});
+    const witnessSql2 = postgres(witnessUrl2, { max: 4, onnotice: () => {} });
+    try {
+      const signer = fictionalWitnessSigner();
+      const core2 = createWitnessCore({ sql: witnessSql2, signer: signer.port });
+      const [labKey] = await deliverySql`
+        SELECT log_signing_key_id FROM envelopes
+        WHERE conversation_id = ${LAB_CONVERSATION_ID} AND position = 1`;
+      await witnessSql2`
+        INSERT INTO witness_submitter_keys (
+          key_id, public_key, valid_from, valid_until
+        ) VALUES (
+          ${String(labKey.log_signing_key_id)},
+          ${Buffer.from(FICTIONAL_DELIVERY_LAB_ED25519_PUBLIC_KEY_RAW)},
+          ${LAB_NOW}::timestamptz - interval '30 days',
+          ${LAB_NOW}::timestamptz + interval '30 days'
+        )`;
+
+      const witnessKeyId = signer.port.witnessKeyId;
+      const first = await runDeliverySubmissionPass(deliverySql, witnessKeyId, {
+        submitDelivery: (submission) => core2.extendDelivery(submission),
+      });
+      // Every LAB-conversation envelope is witnessed in order; conversations
+      // signed by unregistered keys (the issuance fixture) report blocked.
+      expect(first.witnessed).toBeGreaterThanOrEqual(2);
+      const receipts = await deliverySql`
+        SELECT position, witness_tree_size FROM log_witness_receipts
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+          AND witness_key_id = ${witnessKeyId}
+        ORDER BY position`;
+      expect(receipts.length).toBe(first.witnessed);
+      expect(String(receipts[0].position)).toBe("1");
+      for (const blockedEntry of first.blocked) {
+        expect(blockedEntry.outcome).toBe("rejected:submitter-key-unknown");
+      }
+
+      // The pass is idempotent: nothing already-receipted is resubmitted.
+      const second = await runDeliverySubmissionPass(deliverySql, witnessKeyId, {
+        submitDelivery: (submission) => core2.extendDelivery(submission),
+      });
+      expect(second.witnessed).toBe(0);
+      // Blocked conversations may hold more than one unreceipted envelope;
+      // the blocked list reports one entry per conversation.
+      expect(second.considered).toBeGreaterThanOrEqual(first.blocked.length);
+    } finally {
+      await witnessSql2.end({ timeout: 5 });
+    }
   });
 });

@@ -17,6 +17,7 @@ if (!databaseUrl || !endpointsRaw) {
 }
 const endpoints = JSON.parse(endpointsRaw);
 const sql = postgres(databaseUrl, { max: 2, onnotice: () => {} });
+const loopSeconds = Number(process.env.JBM_KEEPER_LOOP_SECONDS ?? "0");
 
 let rpcId = 0;
 async function blockHashAt(url, heightHex) {
@@ -44,7 +45,7 @@ async function blockHashAt(url, heightHex) {
   return String(parsed.result.hash).toLowerCase();
 }
 
-try {
+async function pass() {
   const anchors = await sql`
     SELECT DISTINCT source_chain_id, source_block,
            encode(source_block_hash, 'hex') AS source_block_hash
@@ -106,6 +107,21 @@ try {
   console.error(
     `Recheck: ${anchors.length} anchors, ${revoked} revoked, ${suspended} suspended, ${expired.length} expired.`,
   );
+}
+
+try {
+  if (loopSeconds > 0) {
+    for (;;) {
+      try {
+        await pass();
+      } catch (error) {
+        console.error("Recheck pass failed:", String(error));
+      }
+      await new Promise((resolve) => setTimeout(resolve, loopSeconds * 1000));
+    }
+  } else {
+    await pass();
+  }
 } finally {
   await sql.end({ timeout: 5 });
 }
