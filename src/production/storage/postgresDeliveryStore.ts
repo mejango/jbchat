@@ -128,6 +128,57 @@ export function createPostgresDeliveryAppendStore(
     return iso(rows[0].db_now as Date);
   };
 
+  /**
+   * The custody snapshot and the relational quota anchors must advance in
+   * lockstep: the counters row equals the snapshot counter plus every live
+   * relational reservation on that scope. Any divergence is corruption and
+   * fails closed rather than trusting either copy.
+   */
+  const assertQuotaAnchors = async (
+    tx: TransactionSql,
+    snapshot: LockedApplicationAppendSnapshot,
+  ): Promise<void> => {
+    for (const quota of snapshot.quotas) {
+      const counters = await tx`
+        SELECT operation_count, byte_count, reserved_operation_count,
+               reserved_byte_count, row_version
+        FROM quota_counters
+        WHERE scope_type = ${quota.scope}
+          AND scope_hash = ${bytea(quota.scopeHash)}
+          AND quota_name = ${quota.quotaName}
+          AND window_started_at = ${quota.windowStartedAt}::timestamptz`;
+      const liveRows = await tx`
+        SELECT reservation_operation_count, reservation_byte_count
+        FROM application_append_quota_reservations
+        WHERE state = 'live' AND scope_type = ${quota.scope}
+          AND scope_hash = ${bytea(quota.scopeHash)}
+          AND quota_name = ${quota.quotaName}
+          AND window_started_at = ${quota.windowStartedAt}::timestamptz`;
+      let liveOperations = 0n;
+      let liveBytes = 0n;
+      for (const row of liveRows) {
+        liveOperations += BigInt(String(row.reservation_operation_count));
+        liveBytes += BigInt(String(row.reservation_byte_count));
+      }
+      const counter = counters[0];
+      if (
+        !counter ||
+        BigInt(String(counter.operation_count)) !== BigInt(quota.operationCount) ||
+        BigInt(String(counter.byte_count)) !== BigInt(quota.byteCount) ||
+        BigInt(String(counter.reserved_operation_count)) !==
+          BigInt(quota.reservedOperationCount) + liveOperations ||
+        BigInt(String(counter.reserved_byte_count)) !==
+          BigInt(quota.reservedByteCount) + liveBytes ||
+        BigInt(String(counter.row_version)) !==
+          BigInt(quota.rowVersion) + BigInt(liveRows.length)
+      ) {
+        throw new Error(
+          "Authority quota counters diverge from their relational anchors.",
+        );
+      }
+    }
+  };
+
   const loadAuthority = async (
     tx: TransactionSql,
     conversationId: ConversationId,
@@ -156,6 +207,7 @@ export function createPostgresDeliveryAppendStore(
     if (snapshotDigest !== b64(row.snapshot_digest)) {
       throw new Error("Authority snapshot custody digest is inconsistent.");
     }
+    await assertQuotaAnchors(tx, snapshot);
     return {
       snapshot,
       snapshotDigest,
@@ -491,6 +543,24 @@ export function createPostgresDeliveryAppendStore(
               "Reservation callback substituted command or proof facts.",
             );
           }
+          for (const reservation of pending.commitProjection
+            .quotaCapacityReservations) {
+            const reserved = await tx`
+              UPDATE quota_counters SET
+                reserved_operation_count = reserved_operation_count
+                  + ${reservation.reservationOperationCount},
+                reserved_byte_count = reserved_byte_count
+                  + ${reservation.reservationByteCount},
+                row_version = ${reservation.rowVersionAfter},
+                updated_at = ${observedAt}::timestamptz
+              WHERE scope_type = ${reservation.scope}
+                AND scope_hash = ${bytea(reservation.scopeHash)}
+                AND quota_name = ${reservation.quotaName}
+                AND window_started_at = ${reservation.windowStartedAt}::timestamptz
+                AND row_version = ${reservation.rowVersionBefore}
+              RETURNING row_version`;
+            if (reserved.length !== 1) return retry();
+          }
           await tx`
             INSERT INTO application_append_pendings (
               conversation_id, realm_id, intent_digest, admission_command_digest,
@@ -508,6 +578,27 @@ export function createPostgresDeliveryAppendStore(
               ${JSON.stringify(pending)}::jsonb,
               ${observedAt}::timestamptz, ${pending.pendingExpiresAt}::timestamptz
             )`;
+          for (const reservation of pending.commitProjection
+            .quotaCapacityReservations) {
+            await tx`
+              INSERT INTO application_append_quota_reservations (
+                reservation_id, pending_intent_digest, scope_type, scope_hash,
+                quota_name, window_started_at, reservation_operation_count,
+                reservation_byte_count, fence_generation, fence_token_hash,
+                state, row_version_before, row_version_after, created_at
+              ) VALUES (
+                ${bytea(reservation.reservationId)}, ${bytea(pending.intentDigest)},
+                ${reservation.scope}, ${bytea(reservation.scopeHash)},
+                ${reservation.quotaName},
+                ${reservation.windowStartedAt}::timestamptz,
+                ${reservation.reservationOperationCount},
+                ${reservation.reservationByteCount},
+                ${reservation.fenceGeneration},
+                ${bytea(reservation.fenceTokenHash)}, 'live',
+                ${reservation.rowVersionBefore}, ${reservation.rowVersionAfter},
+                ${observedAt}::timestamptz
+              )`;
+          }
           return pendingResultFor(command, pending, "none", observedAt, observedAt);
         }),
       finalizeApplicationAppendAtomically: (
@@ -629,6 +720,37 @@ export function createPostgresDeliveryAppendStore(
             return rejected("attachment-invalid");
           }
           const quotas = convertQuotaCapacity(pending, "finalize");
+          for (const reservation of pending.commitProjection
+            .quotaCapacityReservations) {
+            const post = pending.postReservationQuotas.find(
+              ({ scope }) => scope === reservation.scope,
+            );
+            const next = quotas.find(({ scope }) => scope === reservation.scope);
+            if (!post || !next) return retry();
+            const consumed = await tx`
+              UPDATE quota_counters SET
+                operation_count = operation_count
+                  + ${reservation.reservationOperationCount},
+                byte_count = byte_count + ${reservation.reservationByteCount},
+                reserved_operation_count = reserved_operation_count
+                  - ${reservation.reservationOperationCount},
+                reserved_byte_count = reserved_byte_count
+                  - ${reservation.reservationByteCount},
+                row_version = ${next.rowVersion},
+                updated_at = ${observedAt}::timestamptz
+              WHERE scope_type = ${reservation.scope}
+                AND scope_hash = ${bytea(reservation.scopeHash)}
+                AND quota_name = ${reservation.quotaName}
+                AND window_started_at = ${reservation.windowStartedAt}::timestamptz
+                AND row_version = ${post.rowVersion}
+              RETURNING row_version`;
+            if (consumed.length !== 1) return retry();
+            await tx`
+              UPDATE application_append_quota_reservations
+              SET state = 'consumed', resolved_at = ${observedAt}::timestamptz
+              WHERE reservation_id = ${bytea(reservation.reservationId)}
+                AND state = 'live'`;
+          }
           const nextSnapshot = parseLockedApplicationAppendSnapshot({
             conversation: { ...pending.commitProjection.conversation },
             membership: { ...authority.snapshot.membership },
@@ -827,6 +949,11 @@ export function createPostgresDeliveryAppendStore(
           const pending = parsePendingApplicationAppendIntent(
             inputValue.pendingIntent,
           );
+          const authority = await loadAuthority(
+            tx,
+            pending.envelope.conversationId,
+            true,
+          );
           const located = await loadPending(
             tx,
             pending.envelope.conversationId,
@@ -842,6 +969,7 @@ export function createPostgresDeliveryAppendStore(
                 )
               : unavailable("malformed-dependency-response");
           }
+          if (!authority) return unavailable("malformed-dependency-response");
           const inputFence = parseApplicationAppendReservationFence(
             inputValue.reservationFence,
           );
@@ -878,7 +1006,62 @@ export function createPostgresDeliveryAppendStore(
           } catch {
             return unavailable("malformed-dependency-response");
           }
-          convertQuotaCapacity(pending, "release");
+          const releasedQuotas = convertQuotaCapacity(pending, "release");
+          for (const reservation of pending.commitProjection
+            .quotaCapacityReservations) {
+            const post = pending.postReservationQuotas.find(
+              ({ scope }) => scope === reservation.scope,
+            );
+            const next = releasedQuotas.find(
+              ({ scope }) => scope === reservation.scope,
+            );
+            if (!post || !next) {
+              return unavailable("malformed-dependency-response");
+            }
+            const released = await tx`
+              UPDATE quota_counters SET
+                reserved_operation_count = reserved_operation_count
+                  - ${reservation.reservationOperationCount},
+                reserved_byte_count = reserved_byte_count
+                  - ${reservation.reservationByteCount},
+                row_version = ${next.rowVersion},
+                updated_at = ${observedAt}::timestamptz
+              WHERE scope_type = ${reservation.scope}
+                AND scope_hash = ${bytea(reservation.scopeHash)}
+                AND quota_name = ${reservation.quotaName}
+                AND window_started_at = ${reservation.windowStartedAt}::timestamptz
+                AND row_version = ${post.rowVersion}
+              RETURNING row_version`;
+            if (released.length !== 1) {
+              return unavailable("malformed-dependency-response");
+            }
+            await tx`
+              UPDATE application_append_quota_reservations
+              SET state = 'released', resolved_at = ${observedAt}::timestamptz
+              WHERE reservation_id = ${bytea(reservation.reservationId)}
+                AND state = 'live'`;
+          }
+          const retiredSnapshot = parseLockedApplicationAppendSnapshot({
+            conversation: { ...authority.snapshot.conversation },
+            membership: { ...authority.snapshot.membership },
+            policyHead: { ...authority.snapshot.policyHead },
+            sendGrant: { ...authority.snapshot.sendGrant },
+            pendingRemovalCount: authority.snapshot.pendingRemovalCount,
+            usage: { ...authority.snapshot.usage },
+            quotaBindings: authority.snapshot.quotaBindings.map((binding) => ({
+              ...binding,
+            })),
+            quotas: releasedQuotas.map((quota) => ({ ...quota })),
+          });
+          await tx`
+            UPDATE delivery_conversation_authority SET
+              snapshot_canonical = ${JSON.stringify(retiredSnapshot)}::jsonb,
+              snapshot_digest = ${bytea(
+                computeLockedApplicationAppendSnapshotDigest(retiredSnapshot),
+              )},
+              row_version = row_version + 1,
+              updated_at = ${observedAt}::timestamptz
+            WHERE conversation_id = ${pending.envelope.conversationId}`;
           await tx`
             DELETE FROM application_append_pendings
             WHERE conversation_id = ${pending.envelope.conversationId}`;

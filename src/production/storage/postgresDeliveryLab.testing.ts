@@ -186,6 +186,28 @@ export async function seedPostgresDeliveryLab(
         ) ON CONFLICT DO NOTHING`;
     }
     await tx`
+      INSERT INTO quota_policies (
+        quota_policy_digest, canonical_document, created_at
+      ) VALUES (
+        ${Buffer.from(conversation.quotaPolicyDigest, "base64url")},
+        ${JSON.stringify(snapshot.quotaBindings)}::jsonb, ${now}::timestamptz
+      ) ON CONFLICT DO NOTHING`;
+    for (const quota of snapshot.quotas) {
+      await tx`
+        INSERT INTO quota_counters (
+          scope_type, scope_hash, quota_name, window_started_at,
+          window_seconds, operation_count, byte_count,
+          reserved_operation_count, reserved_byte_count, row_version,
+          updated_at
+        ) VALUES (
+          ${quota.scope}, ${Buffer.from(quota.scopeHash, "base64url")},
+          ${quota.quotaName}, ${quota.windowStartedAt}::timestamptz,
+          ${quota.windowSeconds}, ${quota.operationCount}, ${quota.byteCount},
+          ${quota.reservedOperationCount}, ${quota.reservedByteCount},
+          ${quota.rowVersion}, ${now}::timestamptz
+        ) ON CONFLICT DO NOTHING`;
+    }
+    await tx`
       INSERT INTO conversations (
         conversation_id, relationship_id, relationship_scope_id,
         project_ref_id, kind, delivery_purpose, generation, state,
@@ -221,6 +243,19 @@ export async function seedPostgresDeliveryLab(
         ${conversation.realmId}, ${conversation.projectScopeId},
         ${conversation.tenantScopeId}
       )`;
+    for (const binding of snapshot.quotaBindings) {
+      await tx`
+        INSERT INTO conversation_quota_bindings (
+          conversation_id, quota_policy_digest, scope_type, scope_hash,
+          quota_name, window_seconds, operation_limit, byte_limit
+        ) VALUES (
+          ${conversation.conversationId},
+          ${Buffer.from(conversation.quotaPolicyDigest, "base64url")},
+          ${binding.scope}, ${Buffer.from(binding.scopeHash, "base64url")},
+          ${binding.quotaName}, ${binding.windowSeconds},
+          ${binding.operationLimit}, ${binding.byteLimit}
+        ) ON CONFLICT DO NOTHING`;
+    }
     await tx`
       INSERT INTO conversation_usage (
         conversation_id, envelope_count, envelope_bytes, attachment_bytes, updated_at

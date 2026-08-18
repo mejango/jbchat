@@ -140,6 +140,9 @@ const CONVERSATION_FIXTURE_SQL = `
 INSERT INTO delivery_realms (realm_id, tenant_id, created_at)
 VALUES ('fictional-probe-realm', '00000000-0000-4000-8000-000000000001', now())
 ON CONFLICT DO NOTHING;
+INSERT INTO quota_policies (quota_policy_digest, canonical_document, created_at)
+VALUES (${HEX32("53")}, '{}'::jsonb, now())
+ON CONFLICT DO NOTHING;
 INSERT INTO conversations (
   conversation_id, project_ref_id, kind, delivery_purpose, generation, state,
   group_id_hash, release_profile_id, delivery_limits_digest,
@@ -642,6 +645,99 @@ async function main() {
     );
     assert.match(mutatedPurpose, /immutable/);
     console.error("ok - the purpose-to-role matrix is declared and delivery purpose is immutable");
+
+    sql(
+      databaseUrl,
+      `INSERT INTO directory_checkpoints (
+         checkpoint_id, tree_size, root_hash, signer_key_id, signature, created_at
+       ) VALUES (
+         '00000000-0000-4000-8000-00000000d001', 1, ${HEX32("d1")},
+         'fictional-directory-signer', decode('aa', 'hex'), now()
+       );
+       INSERT INTO policy_log_checkpoints (
+         checkpoint_id, tree_size, root_hash, signer_key_id, signature,
+         witness_key_id, witness_signature, created_at
+       ) VALUES (
+         '00000000-0000-4000-8000-00000000d002', 1, ${HEX32("d2")},
+         'fictional-policy-signer', decode('aa', 'hex'),
+         'fictional-witness', decode('bb', 'hex'), now()
+       );
+       INSERT INTO external_sender_credentials (
+         external_sender_credential_id, project_ref_id, signer_generation,
+         credential_public, credential_fingerprint, not_before, expires_at,
+         created_checkpoint_id, witnessed_at, lifecycle_state
+       ) VALUES (
+         '00000000-0000-4000-8000-00000000d003',
+         '00000000-0000-4000-8000-000000000002', 1, decode('cc', 'hex'),
+         ${HEX32("d3")}, now() - interval '1 day', now() + interval '30 days',
+         '00000000-0000-4000-8000-00000000d002', now(), 'published'
+       );
+       INSERT INTO policy_head_signing_keys (
+         policy_head_signing_key_id, project_ref_id, public_key,
+         key_fingerprint, not_before, expires_at, lifecycle_state,
+         policy_checkpoint_id
+       ) VALUES (
+         'fictional-policy-head-signer', '00000000-0000-4000-8000-000000000002',
+         decode('dd', 'hex'), ${HEX32("d4")}, now() - interval '1 day',
+         now() + interval '30 days', 'active',
+         '00000000-0000-4000-8000-00000000d002'
+       )`,
+    );
+    const policyHeadInsert = (headId, count) => `
+      INSERT INTO policy_heads (
+        policy_head_id, conversation_id, policy_head_sequence,
+        previous_policy_head_hash, policy_head_hash, epoch, roster_version,
+        roster_hash, confirmed_transcript_hash, delivery_log_position,
+        delivery_log_head_hash, evaluation_log_position,
+        evaluation_log_head_hash, policy_id, policy_revision, policy_hash,
+        mandatory_proposal_count, mandatory_proposal_set_hash,
+        authorized_send_grant_set_hash, authorized_quota_policy_digest,
+        evaluated_chain_id, evaluated_block, evaluated_block_hash,
+        directory_checkpoint_id, policy_log_checkpoint_id,
+        active_external_sender_credential_id, active_external_sender_fingerprint,
+        active_signer_generation, issued_at, expires_at,
+        policy_head_signing_key_id, canonical_signed_body,
+        canonical_signed_body_sha256, signature
+      ) VALUES (
+        '${headId}', '00000000-0000-4000-8000-000000000301',
+        (SELECT coalesce(max(policy_head_sequence), 0) + 1 FROM policy_heads),
+        ${HEX32("d5")}, decode(md5('${headId}') || md5('${headId}'), 'hex'),
+        0, 0, ${HEX32("92")}, ${HEX32("95")}, 0, ${HEX32("d6")}, 0,
+        ${HEX32("d7")}, '00000000-0000-4000-8000-00000000d004', 1,
+        ${HEX32("d8")}, ${count}, ${HEX32("d9")}, ${HEX32("da")},
+        ${HEX32("53")}, 'eip155:8453', 1, ${HEX32("db")},
+        '00000000-0000-4000-8000-00000000d001',
+        '00000000-0000-4000-8000-00000000d002',
+        '00000000-0000-4000-8000-00000000d003', ${HEX32("d3")}, 1,
+        now(), now() + interval '4 minutes', 'fictional-policy-head-signer',
+        decode('ee', 'hex'), ${HEX32("dc")}, decode('ff', 'hex')
+      )`;
+    const incompleteHead = sql(
+      databaseUrl,
+      `BEGIN;
+       ${policyHeadInsert("00000000-0000-4000-8000-00000000d101", 1)};
+       COMMIT;`,
+      { expectFailure: true },
+    );
+    assert.match(incompleteHead, /mandatory proposal rows/);
+    sql(
+      databaseUrl,
+      `BEGIN;
+       ${policyHeadInsert("00000000-0000-4000-8000-00000000d102", 0)};
+       COMMIT;`,
+    );
+    const driftedCount = sql(
+      databaseUrl,
+      `BEGIN;
+       UPDATE policy_heads SET mandatory_proposal_count = 1
+       WHERE policy_head_id = '00000000-0000-4000-8000-00000000d102';
+       COMMIT;`,
+      { expectFailure: true },
+    );
+    assert.match(driftedCount, /mandatory proposal rows/);
+    console.error(
+      "ok - a policy head cannot commit unless its mandatory-proposal rows match its declared count",
+    );
 
     await proveConcurrentPositionFencing(databaseUrl);
     await proveConcurrentMigrationRunners(port);

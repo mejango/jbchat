@@ -434,4 +434,69 @@ describeStorage("PostgreSQL application-append repository", () => {
       snapshot.conversation.tenantScopeId,
     );
   });
+
+  it("anchors quota capacity in relational counters and reservation rows", async () => {
+    const snapshotBefore = await store.loadSnapshot(
+      parseConversationId(LAB_CONVERSATION_ID),
+    );
+    const conversationQuota = snapshotBefore.quotas.find(
+      ({ scope }) => scope === "conversation",
+    );
+    if (!conversationQuota) throw new Error("conversation quota missing");
+    const scopeHash = Buffer.from(conversationQuota.scopeHash, "base64url");
+    const counterQuery = () => sql`
+      SELECT operation_count, byte_count, reserved_operation_count,
+             reserved_byte_count, row_version
+      FROM quota_counters
+      WHERE scope_type = 'conversation' AND scope_hash = ${scopeHash}
+        AND quota_name = ${conversationQuota.quotaName}`;
+    const [before] = await counterQuery();
+    expect(String(before.operation_count)).toBe(conversationQuota.operationCount);
+    expect(String(before.reserved_operation_count)).toBe("0");
+
+    const accepted = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "6b5609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e5-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "quota anchor probe",
+      }),
+    );
+    expect(accepted).toMatchObject({ status: "accepted" });
+    const [after] = await counterQuery();
+    expect(
+      BigInt(String(after.operation_count)) -
+        BigInt(String(before.operation_count)),
+    ).toBe(1n);
+    expect(
+      BigInt(String(after.byte_count)) - BigInt(String(before.byte_count)),
+    ).toBeGreaterThan(0n);
+    expect(String(after.reserved_operation_count)).toBe("0");
+    expect(String(after.reserved_byte_count)).toBe("0");
+    expect(
+      BigInt(String(after.row_version)) - BigInt(String(before.row_version)),
+    ).toBe(2n);
+
+    const [reservationStates] = await sql`
+      SELECT
+        count(*) FILTER (WHERE state = 'live') AS live,
+        count(*) FILTER (WHERE state = 'consumed') AS consumed,
+        count(*) FILTER (WHERE state = 'released') AS released
+      FROM application_append_quota_reservations`;
+    expect(String(reservationStates.live)).toBe("0");
+    expect(Number(reservationStates.consumed)).toBeGreaterThanOrEqual(5);
+    expect(Number(reservationStates.released)).toBeGreaterThanOrEqual(10);
+    const [unresolved] = await sql`
+      SELECT count(*) AS rows FROM application_append_quota_reservations
+      WHERE state <> 'live' AND resolved_at IS NULL`;
+    expect(String(unresolved.rows)).toBe("0");
+
+    const snapshotAfter = await store.loadSnapshot(
+      parseConversationId(LAB_CONVERSATION_ID),
+    );
+    const quotaAfter = snapshotAfter.quotas.find(
+      ({ scope }) => scope === "conversation",
+    );
+    expect(quotaAfter?.operationCount).toBe(String(after.operation_count));
+    expect(quotaAfter?.rowVersion).toBe(String(after.row_version));
+  });
 });
