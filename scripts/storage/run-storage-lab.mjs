@@ -137,6 +137,9 @@ COMMIT;`;
 }
 
 const CONVERSATION_FIXTURE_SQL = `
+INSERT INTO delivery_realms (realm_id, tenant_id, created_at)
+VALUES ('fictional-probe-realm', '00000000-0000-4000-8000-000000000001', now())
+ON CONFLICT DO NOTHING;
 INSERT INTO conversations (
   conversation_id, project_ref_id, kind, delivery_purpose, generation, state,
   group_id_hash, release_profile_id, delivery_limits_digest,
@@ -144,14 +147,15 @@ INSERT INTO conversations (
   roster_hash, external_senders_hash, reader_history_retention_policy_hash,
   confirmed_transcript_hash, current_policy_head_hash, current_log_head_hash,
   retention_policy_version, retention_policy, created_at, last_activity_at,
-  expires_at
+  expires_at, realm_id, project_scope_id, tenant_scope_id
 ) VALUES (
   '00000000-0000-4000-8000-000000000301', '00000000-0000-4000-8000-000000000002',
   'community_room', 'community', 1, 'active',
   ${HEX32("91")}, 'fictional-release.v1', ${HEX32("51")}, ${HEX32("52")},
   ${HEX32("53")}, 0, 0, ${HEX32("92")}, ${HEX32("93")}, ${HEX32("94")},
   ${HEX32("95")}, ${HEX32("96")}, ${HEX32("97")},
-  1, '{}'::jsonb, now(), now(), now() + interval '30 days'
+  1, '{}'::jsonb, now(), now(), now() + interval '30 days',
+  'fictional-probe-realm', 'fictional-probe-project', 'fictional-probe-tenant'
 );
 `;
 

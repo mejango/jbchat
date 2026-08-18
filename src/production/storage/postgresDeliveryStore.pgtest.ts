@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
 import {
@@ -384,6 +385,53 @@ describeStorage("PostgreSQL application-append repository", () => {
         AND envelope_id = '6a5609f1-9662-49f6-9cda-9ef319abe51d'`;
     expect(new Date(finalized.finalized_at as Date).toISOString()).toBe(
       "2026-08-14T16:23:00.000Z",
+    );
+  });
+
+  it("fences realms and quota scopes with relational constraints", async () => {
+    await expect(
+      sql`
+        INSERT INTO application_append_acceptances (
+          realm_id, conversation_id, envelope_id, position, intent_digest,
+          admission_command_digest, semantic_identity_digest,
+          acceptance_canonical, finalized_at
+        ) VALUES (
+          'wrong-realm', ${LAB_CONVERSATION_ID},
+          '00000000-0000-4000-8000-0000dead0001', 999,
+          ${Buffer.alloc(32, 0x01)}, ${Buffer.alloc(32, 0x02)},
+          ${Buffer.alloc(32, 0x03)}, ${"{}"}::jsonb, delivery_db_now()
+        )`,
+    ).rejects.toThrow(/foreign key/);
+    await expect(
+      sql`
+        INSERT INTO quota_counters (
+          scope_type, scope_hash, quota_name, window_started_at,
+          window_seconds, updated_at
+        ) VALUES (
+          'account', ${Buffer.alloc(32, 0x09)}, 'application-append',
+          delivery_db_now(), 86400, delivery_db_now()
+        )`,
+    ).rejects.toThrow(/foreign key/);
+    const snapshot = await store.loadSnapshot(
+      parseConversationId(LAB_CONVERSATION_ID),
+    );
+    for (const binding of snapshot.quotaBindings) {
+      const [scopeRow] = await sql`
+        SELECT realm_id, subject_id FROM quota_scopes
+        WHERE scope_type = ${binding.scope}
+          AND scope_hash = ${Buffer.from(binding.scopeHash, "base64url")}`;
+      expect(scopeRow.realm_id).toBe(snapshot.conversation.realmId);
+      expect(String(scopeRow.subject_id).length).toBeGreaterThan(0);
+    }
+    const [conversationScopes] = await sql`
+      SELECT realm_id, project_scope_id, tenant_scope_id FROM conversations
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(conversationScopes.realm_id).toBe(snapshot.conversation.realmId);
+    expect(conversationScopes.project_scope_id).toBe(
+      snapshot.conversation.projectScopeId,
+    );
+    expect(conversationScopes.tenant_scope_id).toBe(
+      snapshot.conversation.tenantScopeId,
     );
   });
 });

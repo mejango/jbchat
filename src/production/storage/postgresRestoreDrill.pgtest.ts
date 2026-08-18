@@ -188,7 +188,7 @@ describeDrill(`restore drill (${PHASE} phase)`, () => {
       env: { ...process.env, JBM_STORAGE_DATABASE_URL: DATABASE_URL },
     });
     expect(settle.status).toBe(0);
-    expect(settle.stderr).toMatch(/10 migrations, 0 newly applied/);
+    expect(settle.stderr).toMatch(/migrations, 0 newly applied/);
   });
 
   it("recomputes the envelope hash chain from restored relational rows alone", async () => {

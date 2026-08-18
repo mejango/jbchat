@@ -163,6 +163,29 @@ export async function seedPostgresDeliveryLab(
         ${signingKeyValidUntil}::timestamptz, ${now}::timestamptz
       ) ON CONFLICT DO NOTHING`;
     await tx`
+      INSERT INTO delivery_realms (realm_id, tenant_id, created_at)
+      VALUES (${conversation.realmId}, ${FIXTURE_TENANT_ID}, ${now}::timestamptz)
+      ON CONFLICT DO NOTHING`;
+    for (const binding of snapshot.quotaBindings) {
+      const subjectId =
+        binding.scope === "installation"
+          ? snapshot.membership.installationId
+          : binding.scope === "account"
+            ? snapshot.membership.accountId
+            : binding.scope === "project"
+              ? conversation.projectScopeId
+              : binding.scope === "conversation"
+                ? conversation.conversationId
+                : conversation.tenantScopeId;
+      await tx`
+        INSERT INTO quota_scopes (
+          scope_type, scope_hash, realm_id, subject_id, created_at
+        ) VALUES (
+          ${binding.scope}, ${Buffer.from(binding.scopeHash, "base64url")},
+          ${conversation.realmId}, ${subjectId}, ${now}::timestamptz
+        ) ON CONFLICT DO NOTHING`;
+    }
+    await tx`
       INSERT INTO conversations (
         conversation_id, relationship_id, relationship_scope_id,
         project_ref_id, kind, delivery_purpose, generation, state,
@@ -172,7 +195,8 @@ export async function seedPostgresDeliveryLab(
         reader_history_retention_policy_hash, confirmed_transcript_hash,
         last_policy_head_sequence, current_policy_head_hash, last_position,
         current_log_head_hash, retention_policy_version, retention_policy,
-        created_at, last_activity_at, expires_at
+        created_at, last_activity_at, expires_at,
+        realm_id, project_scope_id, tenant_scope_id
       ) VALUES (
         ${conversation.conversationId},
         ${kind === "relationship" ? FIXTURE_RELATIONSHIP_ID : null},
@@ -193,7 +217,9 @@ export async function seedPostgresDeliveryLab(
         ${basePosition},
         ${Buffer.from(conversation.currentLogHeadHash, "base64url")},
         1, ${"{}"}::jsonb, ${now}::timestamptz, ${now}::timestamptz,
-        ${now}::timestamptz + interval '365 days'
+        ${now}::timestamptz + interval '365 days',
+        ${conversation.realmId}, ${conversation.projectScopeId},
+        ${conversation.tenantScopeId}
       )`;
     await tx`
       INSERT INTO conversation_usage (
