@@ -41,6 +41,7 @@ export type MembershipIntentCreation =
         | "grant-required"
         | "grant-invalid"
         | "target-not-enrolled"
+        | "target-credential-missing"
         | "target-not-a-member"
         | "key-package-unavailable"
         | "malformed-request";
@@ -292,16 +293,21 @@ export function createMembershipIntentStore(
             credentialFingerprint: fromPgBase64(row.fingerprint),
           }));
         if (operation === "add") {
+          // The roster projects the target's conversation role credential -
+          // the same identity the Commit's membership row binds - so the
+          // proposed hash computed here is provable at Commit time.
           const credentials = await tx`
-            SELECT device_credential_id,
-                   encode(mls_credential_fingerprint, 'base64') AS fingerprint
-            FROM device_credentials
-            WHERE installation_id = ${targetInstallationId}
-              AND status = 'active'`;
+            SELECT credential_id,
+                   encode(credential_fingerprint, 'base64') AS fingerprint
+            FROM role_credentials
+            WHERE conversation_id = ${conversationId}
+              AND installation_id = ${targetInstallationId}
+              AND state = 'active'
+              AND expires_at > ${now}::timestamptz`;
           if (credentials.length !== 1) {
             return Object.freeze({
               status: "refused" as const,
-              reasonCode: "target-not-enrolled" as const,
+              reasonCode: "target-credential-missing" as const,
             });
           }
           projectedRoster.push({
@@ -312,7 +318,7 @@ export function createMembershipIntentStore(
             ),
             accountId: targetAccountId,
             installationId: targetInstallationId,
-            credentialId: String(credentials[0].device_credential_id),
+            credentialId: String(credentials[0].credential_id),
             credentialFingerprint: fromPgBase64(credentials[0].fingerprint),
           });
         }

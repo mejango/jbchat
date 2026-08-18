@@ -1,5 +1,12 @@
 import { Buffer } from "node:buffer";
-import { generateKeyPairSync, randomBytes, sign as signNode, webcrypto } from "node:crypto";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  randomUUID,
+  sign as signNode,
+  webcrypto,
+} from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -21,6 +28,7 @@ import {
 import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
 import { setDeliveryLabClock } from "./postgresDeliveryLab.testing";
 import { createExternalProposalStore } from "./externalProposalStore";
+import { createMembershipCommitStore } from "./membershipCommitStore";
 import { signFictionalDeliveryCheckpointDigestForTesting } from "../delivery/fictionalCryptoPorts.testing";
 import {
   computeExternalProposalHash,
@@ -156,6 +164,27 @@ describeStorage("membership intents", () => {
     };
   };
 
+  const seedRoleCredential = async (
+    credentialId: string,
+    installationId: string,
+    accountId: string,
+    fingerprintByte: number,
+  ): Promise<void> => {
+    await sql`
+      INSERT INTO role_credentials (
+        credential_id, conversation_id, installation_id, account_id,
+        policy_id, policy_revision, role, credential_public,
+        credential_fingerprint, issued_at, expires_at, revocation_version,
+        state
+      ) VALUES (
+        ${credentialId}, ${LAB_CONVERSATION_ID}, ${installationId},
+        ${accountId}, ${POLICY_ID}, 1, 'customer',
+        ${Buffer.alloc(32, fingerprintByte)},
+        ${Buffer.alloc(32, fingerprintByte)}, ${NOW}::timestamptz,
+        ${NOW}::timestamptz + interval '30 days', 1, 'active'
+      )`;
+  };
+
   const seedGrant = async (
     grantIdValue: string,
     accountId: string,
@@ -201,6 +230,12 @@ describeStorage("membership intents", () => {
       )`;
     grantId = "00000000-0000-4000-8000-0000000a0002";
     await seedGrant(grantId, targetAccountId, targetInstallationId, projectRefId);
+    await seedRoleCredential(
+      "00000000-0000-4000-8000-0000000a0009",
+      targetInstallationId,
+      targetAccountId,
+      0xb1,
+    );
     await sql`
       INSERT INTO policy_log_checkpoints (
         checkpoint_id, tree_size, root_hash, signer_key_id, signature,
@@ -398,6 +433,12 @@ describeStorage("membership intents", () => {
       second.installationId,
       projectRefId,
     );
+    await seedRoleCredential(
+      "00000000-0000-4000-8000-0000000a000a",
+      second.installationId,
+      second.accountId,
+      0xb2,
+    );
     const created = await store.createIntent(
       addInput({
         targetInstallationId: second.installationId,
@@ -496,5 +537,205 @@ describeStorage("membership intents", () => {
       LAB_INSTALLATION_ID,
     );
     expect(cancelled).toMatchObject({ status: "resolved", state: "cancelled" });
+  });
+
+  it("consumes a membership Commit through the full add lifecycle", async () => {
+    const third = await enrollDevice();
+    const thirdGrantId = "00000000-0000-4000-8000-0000000a0007";
+    await seedGrant(
+      thirdGrantId,
+      third.accountId,
+      third.installationId,
+      projectRefId,
+    );
+    const targetCredentialId = "00000000-0000-4000-8000-0000000a0008";
+    await seedRoleCredential(
+      targetCredentialId,
+      third.installationId,
+      third.accountId,
+      0xaa,
+    );
+
+    const created = await store.createIntent(
+      addInput({
+        targetInstallationId: third.installationId,
+        grantId: thirdGrantId,
+      }),
+    );
+    expect(created.status).toBe("created");
+    if (created.status !== "created") throw new Error("intent refused");
+
+    const signer = {
+      signCheckpointDigest: async (_keyId: string, digest: string) =>
+        signFictionalDeliveryCheckpointDigestForTesting(
+          Buffer.from(digest, "base64url"),
+        ).toString("base64url"),
+    };
+    const proposals = createExternalProposalStore({ sql, signer });
+    const proposed = await proposals.recordProposal({
+      intentId: created.intentId,
+      publicMessage: Buffer.from("add-proposal", "utf8").toString("base64url"),
+      authorizationRecordHash: Buffer.alloc(32, 0xab).toString("base64url"),
+      signerExternalSenderCredentialId: EXTERNAL_SENDER_ID,
+      transparencyCheckpointId: CHECKPOINT_ID,
+    });
+    expect(proposed.status).toBe("recorded");
+    if (proposed.status !== "recorded") throw new Error("proposal refused");
+
+    const [pre] = await sql`
+      SELECT epoch, roster_version, roster_hash, recipient_set_version,
+             recipient_set_hash, confirmed_transcript_hash
+      FROM conversations WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    const base = {
+      transcript: (pre.confirmed_transcript_hash as Buffer).toString("base64"),
+    };
+    const commits = createMembershipCommitStore({ sql, signer });
+    const commitBytes = Buffer.from("fictional-mls-commit", "utf8");
+    const welcomeBytes = Buffer.from("fictional-mls-welcome", "utf8");
+    const envelopeId = randomUUID();
+    const commitInput = {
+      intentId: created.intentId,
+      committerInstallationId: LAB_INSTALLATION_ID,
+      expectedEpoch: created.baseEpoch,
+      expectedRosterVersion: created.baseRosterVersion,
+      proposedRosterHash: created.proposedRosterHash,
+      mandatoryProposals: [],
+      envelopeId,
+      commit: commitBytes.toString("base64url"),
+      envelopeSha256: createHash("sha256")
+        .update(commitBytes)
+        .digest("base64url"),
+      baseConfirmedTranscriptHash: Buffer.from(
+        String(base.transcript).replace(/\s/g, ""),
+        "base64",
+      ).toString("base64url"),
+      resultingConfirmedTranscriptHash: Buffer.alloc(32, 0xac).toString(
+        "base64url",
+      ),
+      resultingEpoch: String(BigInt(created.baseEpoch) + 1n),
+      welcomeByInstallation: [
+        {
+          installationId: third.installationId,
+          welcome: welcomeBytes.toString("base64url"),
+        },
+      ],
+      targetCredentialId,
+    };
+    const committed = await commits.consumeCommit(commitInput);
+    if (committed.status !== "committed") {
+      throw new Error(`commit refused: ${JSON.stringify(committed)}`);
+    }
+    expect(committed.envelopeId).toBe(envelopeId);
+    expect(committed.consumedProposals).toEqual([
+      { proposalId: proposed.proposalId, proposalHash: proposed.proposalHash },
+    ]);
+
+    const [conversation] = await sql`
+      SELECT state, epoch, roster_version,
+             encode(roster_hash, 'base64') AS roster_hash
+      FROM conversations WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(String(conversation.state)).toBe("active");
+    expect(String(conversation.epoch)).toBe(commitInput.resultingEpoch);
+    expect(String(conversation.roster_version)).toBe(
+      committed.resultingRosterVersion,
+    );
+    expect(
+      Buffer.from(
+        String(conversation.roster_hash).replace(/\s/g, ""),
+        "base64",
+      ).toString("base64url"),
+    ).toBe(created.proposedRosterHash);
+
+    const [membership] = await sql`
+      SELECT bootstrap_mode, joined_position, removed_position
+      FROM memberships
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}
+        AND installation_id = ${third.installationId}`;
+    expect(String(membership.bootstrap_mode)).toBe("welcome");
+    expect(String(membership.joined_position)).toBe(committed.position);
+    expect(membership.removed_position).toBeNull();
+
+    const [keyPackage] = await sql`
+      SELECT state FROM key_packages
+      WHERE installation_id = ${third.installationId}`;
+    expect(String(keyPackage.state)).toBe("used");
+    const [proposalRow] = await sql`
+      SELECT committed_at FROM external_proposals
+      WHERE proposal_id = ${proposed.proposalId}`;
+    expect(proposalRow.committed_at).not.toBeNull();
+    await expect(store.readIntent(created.intentId)).resolves.toMatchObject({
+      state: "committed",
+    });
+    const [intentRow] = await sql`
+      SELECT committed_envelope_id, committed_envelope_position
+      FROM membership_intents WHERE intent_id = ${created.intentId}`;
+    expect(String(intentRow.committed_envelope_id)).toBe(envelopeId);
+    expect(String(intentRow.committed_envelope_position)).toBe(
+      committed.position,
+    );
+    const welcomes = await sql`
+      SELECT target_installation_id FROM mls_welcomes
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}
+        AND commit_position = ${committed.position}`;
+    expect(welcomes.length).toBe(1);
+    expect(String(welcomes[0].target_installation_id)).toBe(
+      third.installationId,
+    );
+    const targetMailbox = await sql`
+      SELECT delivery_class FROM mailbox_entries
+      WHERE installation_id = ${third.installationId}
+        AND conversation_id = ${LAB_CONVERSATION_ID}
+        AND envelope_position = ${committed.position}`;
+    expect(targetMailbox.length).toBe(1);
+    expect(String(targetMailbox[0].delivery_class)).toBe("commit");
+    const rosterCount = await sql`
+      SELECT count(*)::int AS total FROM conversation_roster_projections
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(rosterCount[0].total).toBe(3);
+
+    // A replay of the same Commit fails CAS without a write.
+    await expect(commits.consumeCommit(commitInput)).resolves.toEqual({
+      status: "cas-failed",
+      reasonCode: "stale-counters",
+    });
+
+    // Restore the shared conversation's pre-commit counters so the drills'
+    // fixture appends still admit; the log positions legitimately advance.
+    await sql.begin(async (tx) => {
+      await tx`
+        DELETE FROM mls_welcomes
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+          AND target_installation_id = ${third.installationId}`;
+      await tx`
+        DELETE FROM memberships
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+          AND installation_id = ${third.installationId}`;
+      await tx`
+        DELETE FROM conversation_roster_projections
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+          AND installation_id = ${third.installationId}`;
+      await tx`
+        DELETE FROM conversation_recipient_projections
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+          AND installation_id = ${third.installationId}`;
+      await tx`
+        UPDATE conversation_roster_projections
+        SET roster_version = ${String(pre.roster_version)}
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+      await tx`
+        UPDATE conversation_recipient_projections
+        SET recipient_set_version = ${String(pre.recipient_set_version)}
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+      await tx`
+        UPDATE conversations SET
+          epoch = ${String(pre.epoch)},
+          roster_version = ${String(pre.roster_version)},
+          roster_hash = ${pre.roster_hash as Buffer},
+          recipient_set_version = ${String(pre.recipient_set_version)},
+          recipient_set_hash = ${pre.recipient_set_hash as Buffer},
+          confirmed_transcript_hash = ${pre.confirmed_transcript_hash as Buffer}
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+      await refreshCustodySnapshotDigest(tx, LAB_CONVERSATION_ID);
+    });
   });
 });
