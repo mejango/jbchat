@@ -418,6 +418,67 @@ async function reconstructAuthoritySnapshot(
   return { snapshot, snapshotDigest, roster, recipients };
 }
 
+
+/**
+ * Writes the immutable page-end projection for an envelope appended
+ * outside the application finalize path (external proposals, membership
+ * Commits). Any position can end a page, so every append must leave the
+ * exact historical projection behind or the page reader correctly reports
+ * history-gone. Reads the POST-append conversation row, so call it after
+ * the conversations update in the same transaction.
+ */
+export async function insertPageEndProjectionFromRows(
+  tx: TransactionSql,
+  conversationId: string,
+  position: string,
+  observedAt: string,
+): Promise<void> {
+  const conversations = await tx`
+    SELECT generation, release_profile_id, delivery_limits_digest, etag,
+           epoch, roster_version, confirmed_transcript_hash
+    FROM conversations WHERE conversation_id = ${conversationId}`;
+  const anchors = await tx`
+    SELECT * FROM delivery_policy_head_anchors
+    WHERE conversation_id = ${conversationId}`;
+  if (conversations.length !== 1 || anchors.length !== 1) {
+    throw new Error(
+      "The page-end projection needs exactly one conversation and anchor row.",
+    );
+  }
+  const c = conversations[0];
+  const h = anchors[0];
+  await tx`
+    INSERT INTO conversation_page_end_projections (
+      conversation_id, position, generation, release_profile_id,
+      delivery_limits_digest, etag, epoch, roster_version,
+      confirmed_transcript_hash, policy_head_id, policy_revision,
+      policy_mandatory_proposal_count, policy_mandatory_proposal_set_hash,
+      policy_authorized_send_grant_set_hash,
+      policy_authorized_quota_policy_digest, policy_head_sequence,
+      policy_head_hash, policy_delivery_log_position,
+      policy_delivery_log_head_hash, policy_witness_checkpoint_id,
+      policy_witness_evidence_digest, created_at
+    ) VALUES (
+      ${conversationId}, ${position}, ${String(c.generation)},
+      ${String(c.release_profile_id)},
+      ${Buffer.from(c.delivery_limits_digest as Uint8Array)},
+      ${String(c.etag)}, ${String(c.epoch)}, ${String(c.roster_version)},
+      ${Buffer.from(c.confirmed_transcript_hash as Uint8Array)},
+      ${String(h.policy_head_id)}, ${String(h.policy_revision)},
+      ${String(h.mandatory_proposal_count)},
+      ${Buffer.from(h.mandatory_proposal_set_hash as Uint8Array)},
+      ${Buffer.from(h.authorized_send_grant_set_hash as Uint8Array)},
+      ${Buffer.from(h.authorized_quota_policy_digest as Uint8Array)},
+      ${String(h.policy_head_sequence)},
+      ${Buffer.from(h.policy_head_hash as Uint8Array)},
+      ${String(h.delivery_log_position)},
+      ${Buffer.from(h.delivery_log_head_hash as Uint8Array)},
+      ${h.witness_checkpoint_id === null ? null : String(h.witness_checkpoint_id)},
+      ${Buffer.from(h.witness_evidence_digest as Uint8Array)},
+      ${observedAt}::timestamptz
+    )`;
+}
+
 /**
  * Recomputes and rewrites the custody snapshot digest after a transaction
  * mutated fenced fields outside the application-append finalize path

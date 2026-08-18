@@ -11,7 +11,10 @@ import {
   type DeliveryLogCheckpointInput,
 } from "../delivery/hashes";
 import type { Hash32 } from "../delivery/valueObjects";
-import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
+import {
+  insertPageEndProjectionFromRows,
+  refreshCustodySnapshotDigest,
+} from "./postgresDeliveryStore";
 
 const ENVELOPE_RETENTION_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
 const PROPOSAL_CONTENT_TYPE =
@@ -313,6 +316,7 @@ export function createExternalProposalStore(
         await tx`
           UPDATE membership_intents SET state = 'proposed'
           WHERE intent_id = ${intentId}`;
+        await insertPageEndProjectionFromRows(tx, conversationId, position, now);
         // last_position and current_log_head_hash are custody-fenced fields.
         await refreshCustodySnapshotDigest(tx, conversationId);
         return Object.freeze({

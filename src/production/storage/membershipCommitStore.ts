@@ -14,7 +14,10 @@ import {
   computeApplicationAppendRecipientSetHash,
 } from "../delivery/state";
 import type { Hash32 } from "../delivery/valueObjects";
-import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
+import {
+  insertPageEndProjectionFromRows,
+  refreshCustodySnapshotDigest,
+} from "./postgresDeliveryStore";
 import type { ExternalProposalSigningPort } from "./externalProposalStore";
 
 const ENVELOPE_RETENTION_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
@@ -726,6 +729,12 @@ export function createMembershipCommitStore(
               ${now}::timestamptz, ${now}::timestamptz
             )`;
 
+          await insertPageEndProjectionFromRows(
+            tx,
+            conversationId,
+            position,
+            now,
+          );
           await refreshCustodySnapshotDigest(tx, conversationId);
           return Object.freeze({
             status: "committed" as const,

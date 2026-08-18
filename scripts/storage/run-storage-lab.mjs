@@ -930,6 +930,27 @@ async function main() {
       "the membership intent suite must pass",
     );
 
+    // Runs alone for the same reason as the membership suite: the full
+    // HTTP lifecycle flips the shared conversation through
+    // membership_pending and back.
+    console.error("Running the messaging HTTP suite...");
+    const httpSuite = run(
+      "npx",
+      [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.storage.config.ts",
+        "src/production/http/messagingHttp.pgtest.ts",
+      ],
+      {
+        env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
+        stdio: ["ignore", "inherit", "inherit"],
+        encoding: undefined,
+      },
+    );
+    assert.equal(httpSuite.status, 0, "the messaging HTTP suite must pass");
+
     await runRestoreDrill(labDirectory, port, databaseUrl);
     await runFailoverDrill(labDirectory, dataDirectory, port, databaseUrl);
 
