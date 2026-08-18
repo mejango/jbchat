@@ -1,5 +1,10 @@
 import { Buffer } from "node:buffer";
-import { computeEnvelopeSha256 } from "./hashes";
+import {
+  computeDeliveryLogCheckpointDigest,
+  computeEnvelopeLeafHash,
+  computeEnvelopeSha256,
+  computeLogHeadHash,
+} from "./hashes";
 import {
   DELIVERY_TESTED_CEILINGS,
   type DeliveryLimits,
@@ -72,7 +77,40 @@ export const LAB_POLICY_CONSISTENCY_EVIDENCE_DIGEST = labHash(9);
 export const LAB_PRIOR_POLICY_HEAD_HASH = labHash(10);
 export const LAB_PRIOR_POLICY_WITNESS_EVIDENCE_DIGEST = labHash(11);
 export const LAB_BASE_POSITION = "1";
-export const LAB_BASE_HEAD_HASH = labHash(12);
+export const LAB_LOG_SIGNING_KEY_ID = "fictional-delivery-lab-2026q3";
+// The synthetic base head is the head of a real genesis join Commit so the
+// relational join-commit linkage and the hash chain both hold from row one.
+export const LAB_GENESIS_ENVELOPE_ID =
+  "005609f1-9662-49f6-9cda-9ef319abe51d";
+export const LAB_GENESIS_PREVIOUS_HEAD_HASH = ZERO_HASH32;
+export const LAB_GENESIS_ENVELOPE_SHA256 = labHash(18);
+export const LAB_GENESIS_LEAF_HASH = computeEnvelopeLeafHash({
+  conversationId: LAB_CONVERSATION_ID,
+  position: "1",
+  envelopeId: LAB_GENESIS_ENVELOPE_ID,
+  envelopeClass: "mls_commit",
+  sender: {
+    type: "installation",
+    accountId: LAB_ACCOUNT_ID,
+    installationId: LAB_INSTALLATION_ID,
+  },
+  epoch: "0",
+  rosterVersion: "0",
+  contentType: "application/vnd.juicebox.messaging.mls-public-message",
+  envelopeSha256: LAB_GENESIS_ENVELOPE_SHA256,
+  receivedAt: LAB_NOW,
+} as Parameters<typeof computeEnvelopeLeafHash>[0]);
+export const LAB_BASE_HEAD_HASH = computeLogHeadHash(
+  parseHash32(LAB_GENESIS_PREVIOUS_HEAD_HASH),
+  LAB_GENESIS_LEAF_HASH,
+);
+export const LAB_GENESIS_CHECKPOINT_DIGEST = computeDeliveryLogCheckpointDigest({
+  conversationId: LAB_CONVERSATION_ID,
+  position: "1",
+  previousHeadHash: LAB_GENESIS_PREVIOUS_HEAD_HASH,
+  headHash: LAB_BASE_HEAD_HASH,
+  signingKeyId: LAB_LOG_SIGNING_KEY_ID,
+} as Parameters<typeof computeDeliveryLogCheckpointDigest>[0]);
 export const LAB_ROLE_CREDENTIAL_FINGERPRINT = labHash(13);
 export const LAB_SEND_GRANT_INCLUSION_EVIDENCE_DIGEST = labHash(14);
 export const LAB_AUTHORIZED_SEND_GRANT_SET_HASH = labHash(15);
@@ -82,8 +120,6 @@ export const LAB_TENANT_SCOPE_ID = "fictional-tenant";
 export const LAB_ROLE_CREDENTIAL_ID =
   "e6f94218-ac09-4c31-b1a6-d4c75139f5bb";
 export const LAB_POLICY_SIGNING_KEY_ID = "fictional-policy-lab-2026q3";
-export const LAB_LOG_SIGNING_KEY_ID = "fictional-delivery-lab-2026q3";
-
 export interface FictionalLabExtraMember {
   readonly accountId: string;
   readonly installationId: string;

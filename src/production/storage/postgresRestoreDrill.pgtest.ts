@@ -2,8 +2,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
 import {
-  LAB_BASE_HEAD_HASH,
   LAB_CONVERSATION_ID,
+  LAB_GENESIS_PREVIOUS_HEAD_HASH,
   fictionalAppendRequest,
   fictionalDeliveryLabSeed,
   fictionalDeliveryTrustContext,
@@ -206,7 +206,7 @@ describeDrill(`restore drill (${PHASE} phase)`, () => {
       WHERE conversation_id = ${LAB_CONVERSATION_ID}
       ORDER BY position`;
     expect(rows.length).toBeGreaterThan(0);
-    let previousHead = parseHash32(LAB_BASE_HEAD_HASH);
+    let previousHead = parseHash32(LAB_GENESIS_PREVIOUS_HEAD_HASH);
     for (const row of rows) {
       const receivedAt = parseRfc3339Millis(
         new Date(row.received_at).toISOString(),
@@ -215,7 +215,7 @@ describeDrill(`restore drill (${PHASE} phase)`, () => {
         conversationId: parseConversationId(LAB_CONVERSATION_ID),
         position: String(row.position),
         envelopeId: String(row.envelope_id),
-        envelopeClass: "application",
+        envelopeClass: String(row.envelope_class),
         sender: {
           type: "installation",
           accountId: String(row.sender_account_id),

@@ -2,6 +2,14 @@ import { Buffer } from "node:buffer";
 import type { Sql } from "postgres";
 import { sha256Bytes } from "../delivery/hashes";
 import { FICTIONAL_DELIVERY_LAB_ED25519_PUBLIC_KEY_RAW } from "../delivery/fictionalCryptoPorts.testing";
+import {
+  LAB_GENESIS_CHECKPOINT_DIGEST,
+  LAB_GENESIS_ENVELOPE_ID,
+  LAB_GENESIS_ENVELOPE_SHA256,
+  LAB_GENESIS_LEAF_HASH,
+  LAB_GENESIS_PREVIOUS_HEAD_HASH,
+  LAB_TRANSCRIPT_HASH,
+} from "../delivery/fixtures.testing";
 import type { InMemoryDeliveryLabSeed } from "../delivery/inMemoryLabStore.testing";
 import type { DeliveryLimits } from "../delivery/limits";
 import {
@@ -16,6 +24,7 @@ const FIXTURE_TENANT_ID = "00000000-0000-4000-8000-000000000901";
 const FIXTURE_PROJECT_REF_ID = "00000000-0000-4000-8000-000000000902";
 const FIXTURE_RELATIONSHIP_ID = "00000000-0000-4000-8000-000000000903";
 const FIXTURE_RELATIONSHIP_SCOPE_ID = "00000000-0000-4000-8000-000000000904";
+const FIXTURE_POLICY_ID = "00000000-0000-4000-8000-000000000905";
 
 const KIND_MAP = {
   purchase_support: ["relationship", "purchase_support"],
@@ -218,7 +227,8 @@ export async function seedPostgresDeliveryLab(
         last_policy_head_sequence, current_policy_head_hash, last_position,
         current_log_head_hash, retention_policy_version, retention_policy,
         created_at, last_activity_at, expires_at,
-        realm_id, project_scope_id, tenant_scope_id
+        realm_id, project_scope_id, tenant_scope_id,
+        etag, recipient_set_version, recipient_set_hash
       ) VALUES (
         ${conversation.conversationId},
         ${kind === "relationship" ? FIXTURE_RELATIONSHIP_ID : null},
@@ -241,7 +251,9 @@ export async function seedPostgresDeliveryLab(
         1, ${"{}"}::jsonb, ${now}::timestamptz, ${now}::timestamptz,
         ${now}::timestamptz + interval '365 days',
         ${conversation.realmId}, ${conversation.projectScopeId},
-        ${conversation.tenantScopeId}
+        ${conversation.tenantScopeId}, ${conversation.etag},
+        ${conversation.recipientSetVersion},
+        ${Buffer.from(conversation.recipientSetHash, "base64url")}
       )`;
     for (const binding of snapshot.quotaBindings) {
       await tx`
@@ -255,6 +267,199 @@ export async function seedPostgresDeliveryLab(
           ${binding.quotaName}, ${binding.windowSeconds},
           ${binding.operationLimit}, ${binding.byteLimit}
         ) ON CONFLICT DO NOTHING`;
+    }
+    await tx`
+      INSERT INTO policies (
+        policy_id, policy_revision, project_ref_id, canonical_document,
+        policy_hash, created_at
+      ) VALUES (
+        ${FIXTURE_POLICY_ID}, ${snapshot.sendGrant.policyRevision},
+        ${FIXTURE_PROJECT_REF_ID},
+        ${JSON.stringify({ policy: "fictional-delivery-policy.v1" })}::jsonb,
+        ${Buffer.alloc(32, 0x74)}, ${now}::timestamptz
+      )`;
+    const membership = snapshot.membership;
+    const sendGrant = snapshot.sendGrant;
+    await tx`
+      INSERT INTO envelopes (
+        conversation_id, position, envelope_id, envelope_class, sender_type,
+        sender_account_id, sender_installation_id, epoch, roster_version,
+        base_confirmed_transcript_hash, resulting_confirmed_transcript_hash,
+        content_type, envelope_bytes, envelope_sha256, previous_head_hash,
+        leaf_hash, head_hash, log_signing_key_id, log_checkpoint_digest,
+        log_head_signature, received_at, expires_at
+      ) VALUES (
+        ${conversation.conversationId}, 1, ${LAB_GENESIS_ENVELOPE_ID},
+        'mls_commit', 'installation', ${membership.accountId},
+        ${membership.installationId}, 0, 0,
+        ${Buffer.from(LAB_TRANSCRIPT_HASH, "base64url")},
+        ${Buffer.from(LAB_TRANSCRIPT_HASH, "base64url")},
+        'application/vnd.juicebox.messaging.mls-public-message',
+        ${Buffer.from("genesis", "utf8")},
+        ${Buffer.from(LAB_GENESIS_ENVELOPE_SHA256, "base64url")},
+        ${Buffer.from(LAB_GENESIS_PREVIOUS_HEAD_HASH, "base64url")},
+        ${Buffer.from(LAB_GENESIS_LEAF_HASH, "base64url")},
+        ${Buffer.from(seedValue.baseHeadHash as string, "base64url")},
+        ${signingKeyId},
+        ${Buffer.from(LAB_GENESIS_CHECKPOINT_DIGEST, "base64url")},
+        ${Buffer.alloc(64, 0x99)}, ${now}::timestamptz,
+        ${now}::timestamptz + interval '365 days'
+      )`;
+    await tx`
+      INSERT INTO role_credentials (
+        credential_id, conversation_id, installation_id, account_id,
+        policy_id, policy_revision, role, credential_public,
+        credential_fingerprint, issued_at, expires_at, revocation_version,
+        state
+      ) VALUES (
+        ${membership.credentialId}, ${conversation.conversationId},
+        ${membership.installationId}, ${membership.accountId},
+        ${FIXTURE_POLICY_ID}, ${sendGrant.policyRevision}, ${sendGrant.role},
+        ${Buffer.from(membership.credentialFingerprint, "base64url")},
+        ${Buffer.from(membership.credentialFingerprint, "base64url")},
+        ${now}::timestamptz, ${membership.credentialExpiresAt}::timestamptz,
+        ${membership.credentialRevocationVersion}, ${membership.credentialState}
+      )`;
+    if (sendGrant.roleCredentialId !== membership.credentialId) {
+      await tx`
+        INSERT INTO role_credentials (
+          credential_id, conversation_id, installation_id, account_id,
+          policy_id, policy_revision, role, credential_public,
+          credential_fingerprint, issued_at, expires_at, revocation_version,
+          state
+        ) VALUES (
+          ${sendGrant.roleCredentialId}, ${conversation.conversationId},
+          ${sendGrant.roleCredentialSubjectInstallationId},
+          ${sendGrant.roleCredentialSubjectAccountId}, ${FIXTURE_POLICY_ID},
+          ${sendGrant.policyRevision}, ${sendGrant.role},
+          ${Buffer.from(sendGrant.roleCredentialFingerprint, "base64url")},
+          ${Buffer.from(sendGrant.roleCredentialFingerprint, "base64url")},
+          ${sendGrant.roleCredentialValidFrom}::timestamptz,
+          ${sendGrant.roleCredentialValidUntil}::timestamptz, 1, 'active'
+        )`;
+    }
+    await tx`
+      INSERT INTO memberships (
+        conversation_id, installation_id, account_id, credential_id, role,
+        delivery_purpose, bootstrap_mode, joined_position, removed_position,
+        joined_at, removed_at
+      ) VALUES (
+        ${conversation.conversationId}, ${membership.installationId},
+        ${membership.accountId}, ${membership.credentialId},
+        ${sendGrant.role}, ${deliveryPurpose}, 'creator',
+        ${membership.joinedPosition}, ${membership.removedPosition},
+        ${now}::timestamptz, ${null}
+      )`;
+    await tx`
+      INSERT INTO conversation_send_grants (
+        conversation_id, installation_id, credential_id, conversation_kind,
+        conversation_generation, role, role_credential_id,
+        role_credential_fingerprint, role_credential_subject_account_id,
+        role_credential_subject_installation_id, role_credential_valid_from,
+        role_credential_valid_until, capability, state, policy_revision,
+        policy_head_sequence, policy_head_hash, expires_at,
+        grant_evidence_digest, grant_inclusion_evidence_digest
+      ) VALUES (
+        ${sendGrant.conversationId}, ${sendGrant.installationId},
+        ${sendGrant.credentialId}, ${deliveryPurpose},
+        ${sendGrant.conversationGeneration}, ${sendGrant.role},
+        ${sendGrant.roleCredentialId},
+        ${Buffer.from(sendGrant.roleCredentialFingerprint, "base64url")},
+        ${sendGrant.roleCredentialSubjectAccountId},
+        ${sendGrant.roleCredentialSubjectInstallationId},
+        ${sendGrant.roleCredentialValidFrom}::timestamptz,
+        ${sendGrant.roleCredentialValidUntil}::timestamptz,
+        ${sendGrant.capability}, ${sendGrant.state}, ${sendGrant.policyRevision},
+        ${sendGrant.policyHeadSequence},
+        ${Buffer.from(sendGrant.policyHeadHash, "base64url")},
+        ${sendGrant.expiresAt}::timestamptz,
+        ${Buffer.from(sendGrant.grantEvidenceDigest, "base64url")},
+        ${Buffer.from(sendGrant.grantInclusionEvidenceDigest, "base64url")}
+      )`;
+    const head = snapshot.policyHead;
+    await tx`
+      INSERT INTO delivery_policy_head_anchors (
+        conversation_id, policy_head_id, policy_head_sequence,
+        policy_head_hash, delivery_log_position, delivery_log_head_hash,
+        evaluation_log_position, evaluation_log_head_hash, epoch,
+        roster_version, confirmed_transcript_hash, policy_revision,
+        signed_body_sha256, signer_key_id, signature_sha256,
+        witness_evidence_digest, proof_evidence_digest,
+        policy_consistency_evidence_digest, proof_verified_at, issued_at,
+        expires_at, witness_state, witness_checkpoint_id,
+        witnessed_policy_head_hash, mandatory_proposal_count,
+        mandatory_proposal_set_hash, authorized_send_grant_set_hash,
+        selected_send_grant_evidence_digest,
+        selected_send_grant_inclusion_evidence_digest,
+        authorized_quota_policy_digest, prior_policy_head_sequence,
+        prior_policy_head_hash, prior_policy_witness_checkpoint_id,
+        prior_policy_witness_evidence_digest, updated_at
+      ) VALUES (
+        ${head.conversationId}, ${head.policyHeadId},
+        ${head.policyHeadSequence},
+        ${Buffer.from(head.policyHeadHash, "base64url")},
+        ${head.deliveryLogPosition},
+        ${Buffer.from(head.deliveryLogHeadHash, "base64url")},
+        ${head.evaluationLogPosition},
+        ${Buffer.from(head.evaluationLogHeadHash, "base64url")},
+        ${head.epoch}, ${head.rosterVersion},
+        ${Buffer.from(head.confirmedTranscriptHash, "base64url")},
+        ${head.policyRevision},
+        ${Buffer.from(head.signedBodySha256, "base64url")},
+        ${head.signerKeyId}, ${Buffer.from(head.signatureSha256, "base64url")},
+        ${Buffer.from(head.witnessEvidenceDigest, "base64url")},
+        ${Buffer.from(head.proofEvidenceDigest, "base64url")},
+        ${Buffer.from(head.policyConsistencyEvidenceDigest, "base64url")},
+        ${head.proofVerifiedAt}::timestamptz, ${head.issuedAt}::timestamptz,
+        ${head.expiresAt}::timestamptz, ${head.witnessState},
+        ${head.witnessCheckpointId},
+        ${
+          head.witnessedPolicyHeadHash === null
+            ? null
+            : Buffer.from(head.witnessedPolicyHeadHash, "base64url")
+        },
+        ${head.mandatoryProposalCount},
+        ${Buffer.from(head.mandatoryProposalSetHash, "base64url")},
+        ${Buffer.from(head.authorizedSendGrantSetHash, "base64url")},
+        ${Buffer.from(head.selectedSendGrantEvidenceDigest, "base64url")},
+        ${Buffer.from(head.selectedSendGrantInclusionEvidenceDigest, "base64url")},
+        ${Buffer.from(head.authorizedQuotaPolicyDigest, "base64url")},
+        ${head.priorPolicyHeadSequence},
+        ${Buffer.from(head.priorPolicyHeadHash, "base64url")},
+        ${head.priorPolicyWitnessCheckpointId},
+        ${Buffer.from(head.priorPolicyWitnessEvidenceDigest, "base64url")},
+        ${now}::timestamptz
+      )`;
+    for (const member of roster) {
+      await tx`
+        INSERT INTO conversation_roster_projections (
+          conversation_id, conversation_generation, roster_version,
+          account_id, installation_id, credential_id, credential_fingerprint
+        ) VALUES (
+          ${member.conversationId}, ${member.conversationGeneration},
+          ${member.rosterVersion}, ${member.accountId},
+          ${member.installationId}, ${member.credentialId},
+          ${Buffer.from(member.credentialFingerprint, "base64url")}
+        )`;
+    }
+    for (const recipient of recipients) {
+      await tx`
+        INSERT INTO conversation_recipient_projections (
+          conversation_id, conversation_generation, recipient_set_version,
+          account_id, installation_id, credential_id, credential_fingerprint,
+          credential_revocation_version, credential_state,
+          credential_expires_at, joined_position, removed_position,
+          installation_state
+        ) VALUES (
+          ${recipient.conversationId}, ${recipient.conversationGeneration},
+          ${recipient.recipientSetVersion}, ${recipient.accountId},
+          ${recipient.installationId}, ${recipient.credentialId},
+          ${Buffer.from(recipient.credentialFingerprint, "base64url")},
+          ${recipient.credentialRevocationVersion}, ${recipient.credentialState},
+          ${recipient.credentialExpiresAt}::timestamptz,
+          ${recipient.joinedPosition}, ${recipient.removedPosition},
+          ${recipient.installationState}
+        )`;
     }
     await tx`
       INSERT INTO conversation_usage (

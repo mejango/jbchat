@@ -215,7 +215,7 @@ describeStorage("PostgreSQL application-append repository", () => {
     const rows = await sql`
       SELECT position FROM envelopes
       WHERE conversation_id = ${LAB_CONVERSATION_ID} ORDER BY position`;
-    expect(rows.map((row) => String(row.position))).toEqual(["2", "3", "4"]);
+    expect(rows.map((row) => String(row.position))).toEqual(["1", "2", "3", "4"]);
   });
 
   it("binds ready attachments to the accepted envelope and rejects reuse", async () => {
@@ -498,5 +498,59 @@ describeStorage("PostgreSQL application-append repository", () => {
     );
     expect(quotaAfter?.operationCount).toBe(String(after.operation_count));
     expect(quotaAfter?.rowVersion).toBe(String(after.row_version));
+  });
+
+  it("fails closed when the relational authority graph diverges", async () => {
+    await sql`
+      UPDATE conversation_send_grants SET state = 'suspended'
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    const diverged = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "6c5609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e6-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "diverged authority graph append",
+      }),
+    );
+    expect(diverged).toMatchObject({ status: "unavailable" });
+    await sql`
+      UPDATE conversation_send_grants SET state = 'active'
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+
+    const [originalCredential] = await sql`
+      SELECT revocation_version FROM role_credentials
+      WHERE credential_id = (
+        SELECT credential_id FROM memberships
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+      )`;
+    await sql`
+      UPDATE role_credentials SET revocation_version = 99
+      WHERE credential_id = (
+        SELECT credential_id FROM memberships
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+      )`;
+    const revokedDrift = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "6c5609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e6-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "diverged authority graph append",
+      }),
+    );
+    expect(revokedDrift).toMatchObject({ status: "unavailable" });
+    await sql`
+      UPDATE role_credentials
+      SET revocation_version = ${String(originalCredential.revocation_version)}
+      WHERE credential_id = (
+        SELECT credential_id FROM memberships
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+      )`;
+
+    const healed = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "6c5609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e6-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "diverged authority graph append",
+      }),
+    );
+    expect(healed).toMatchObject({ status: "accepted" });
   });
 });

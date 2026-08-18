@@ -150,7 +150,8 @@ INSERT INTO conversations (
   roster_hash, external_senders_hash, reader_history_retention_policy_hash,
   confirmed_transcript_hash, current_policy_head_hash, current_log_head_hash,
   retention_policy_version, retention_policy, created_at, last_activity_at,
-  expires_at, realm_id, project_scope_id, tenant_scope_id
+  expires_at, realm_id, project_scope_id, tenant_scope_id,
+  etag, recipient_set_version, recipient_set_hash
 ) VALUES (
   '00000000-0000-4000-8000-000000000301', '00000000-0000-4000-8000-000000000002',
   'community_room', 'community', 1, 'active',
@@ -158,7 +159,8 @@ INSERT INTO conversations (
   ${HEX32("53")}, 0, 0, ${HEX32("92")}, ${HEX32("93")}, ${HEX32("94")},
   ${HEX32("95")}, ${HEX32("96")}, ${HEX32("97")},
   1, '{}'::jsonb, now(), now(), now() + interval '30 days',
-  'fictional-probe-realm', 'fictional-probe-project', 'fictional-probe-tenant'
+  'fictional-probe-realm', 'fictional-probe-project', 'fictional-probe-tenant',
+  'fictional-probe-etag', 0, ${HEX32("98")}
 );
 `;
 
