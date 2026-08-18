@@ -145,8 +145,43 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       grants, policy-head anchor, roster/recipient projections, genesis
       join-Commit envelope anchoring the chain from position one);
       loadAuthority cross-checks all of it fail-closed and finalize
-      advances the graph in lockstep. Residual G2 integration: delete the
-      cached JSON snapshot copy once the service consumes rows directly.
+      advances the graph in lockstep.
+
+## Phase 6b — the remainder that could be coded (all shipped)
+- [x] (24946c7) Custody demotion: migration 0014 deletes the cached JSON
+      snapshot; loadAuthority reconstructs the locked snapshot from
+      relational rows (sender-selected via the command) and verifies it
+      against the persisted digest fence; ordinals/window/limits columns
+      make reconstruction byte-exact.
+- [x] (47321a6) Replica-failover drill: streaming standby via
+      pg_basebackup -R, primary killed without notice, standby promoted;
+      pre-failover receipt replays byte-identically and a fresh append
+      continues the chain — zero committed-write loss in the lab.
+- [x] (608ba9f) Policy-head issuance flow: RFC 8785 JCS canonical bodies,
+      jb-msg-policy-head/v1 domain hash, real Ed25519 signer registered in
+      policy_head_signing_keys, gap-free chained sequences under
+      concurrency, ordered mandatory-proposal rows satisfying the deferred
+      completeness trigger, send-grant set-member leaves behind the
+      recomputed root, serving that re-derives from immutable bytes and
+      fails closed on tampering. Heads stay unwitnessed (no policy log).
+- [x] (58e0029) Page-end projections: migration 0015 — immutable exact
+      historical projections at every accepted position written in
+      finalize, append-only policy-transition rows, immutability triggers
+      probe-proven.
+- [x] (6bf2adb) cc1 cursor codec: exact grammar, AAD-bound context,
+      non-oracular single rejection shape, expired-yet-authentic claims,
+      proven against the sync kernel's own claims parser; fenced RPO-0
+      nonce ranges (migration 0016) burning remainders across holders.
+- [x] (bc7e407) Relational page reader: membership-window-scoped
+      position-ordered scan, byte accounting without splitting, empty-
+      anchor replay byte-identical, typed history-gone on purged
+      projections.
+
+NOT codeable here (unchanged): the independent policy log/witness service,
+succinct coalesced range proofs, the five release-pinned verifier adapters
+and production sync route (spec-mandated unconfigured), real KMS custody,
+chain adapters/ratified finality profiles, XMTP execution (5b), and every
+human sign-off gate.
 - [x] Written Candidate-B (XMTP) evaluation (1fb5883):
       docs/xmtp-candidate-b-evaluation.md — verified ciphersuite conflict
       (XMTP pins ChaCha20-Poly1305; frozen profile mandates 0x0001

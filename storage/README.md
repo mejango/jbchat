@@ -65,14 +65,20 @@ PostgreSQL 14 or newer installed locally and is intentionally not part of
 
 ## Boundary
 
-Passing the storage lab is necessary but not sufficient G2 evidence. Still
-open, per the specification's own gate language: historical page-end
-projections and policy-transition range evidence, signed send-grant/quota
-provenance from the (unbuilt) policy-head issuance flow, deleting the
-custody row's cached JSON snapshot once the service consumes relational
-rows directly, and replica failover. Lab-proven: the pending-intent/fence/
-acceptance linkage (0009), the section-11.2 restore drill, DB-authoritative
-time (0010), realm/quota-scope mappings (0011), quota anchors with
-relational capacity CAS plus the policy-head completeness assertion (0012),
-and the relational authority graph with fail-closed cross-checks and a
-genesis join-Commit anchoring the hash chain from position one (0013).
+Passing the storage lab is necessary but not sufficient G2 evidence.
+Lab-proven: the pending-intent/fence/acceptance linkage (0009), the
+section-11.2 restore drill and the streaming-replication failover drill,
+DB-authoritative time (0010), realm/quota-scope mappings (0011), quota
+anchors with relational capacity CAS plus the policy-head completeness
+assertion (0012), the relational authority graph with fail-closed
+reconstruction from rows after the custody JSON was deleted (0013/0014),
+immutable page-end projections and policy-transition rows with the
+relational page reader (0015), the policy-head issuance flow with signed
+immutable bodies and set-member provenance, and the cc1 cursor codec with
+fenced RPO-0 nonce ranges (0016). Still open, per the specification's own
+gate language: the independent policy log/witness service (so issued heads
+stay unwitnessed and historical-page proofs cannot be produced), the
+succinct coalesced policy-transition range proof, the five release-pinned
+page verifier adapters and the production sync route the spec itself
+leaves unconfigured, real KMS custody for the signer domains, and
+cross-region operational failover beyond the lab drill.
