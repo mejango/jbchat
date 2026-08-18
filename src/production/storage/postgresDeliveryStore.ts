@@ -128,368 +128,340 @@ export function createPostgresDeliveryAppendStore(
     return iso(rows[0].db_now as Date);
   };
 
-  /**
-   * The custody snapshot and the relational quota anchors must advance in
-   * lockstep: the counters row equals the snapshot counter plus every live
-   * relational reservation on that scope. Any divergence is corruption and
-   * fails closed rather than trusting either copy.
-   */
-  const assertQuotaAnchors = async (
-    tx: TransactionSql,
-    snapshot: LockedApplicationAppendSnapshot,
-  ): Promise<void> => {
-    for (const quota of snapshot.quotas) {
-      const counters = await tx`
-        SELECT operation_count, byte_count, reserved_operation_count,
-               reserved_byte_count, row_version
-        FROM quota_counters
-        WHERE scope_type = ${quota.scope}
-          AND scope_hash = ${bytea(quota.scopeHash)}
-          AND quota_name = ${quota.quotaName}
-          AND window_started_at = ${quota.windowStartedAt}::timestamptz`;
-      const liveRows = await tx`
-        SELECT reservation_operation_count, reservation_byte_count
-        FROM application_append_quota_reservations
-        WHERE state = 'live' AND scope_type = ${quota.scope}
-          AND scope_hash = ${bytea(quota.scopeHash)}
-          AND quota_name = ${quota.quotaName}
-          AND window_started_at = ${quota.windowStartedAt}::timestamptz`;
-      let liveOperations = 0n;
-      let liveBytes = 0n;
-      for (const row of liveRows) {
-        liveOperations += BigInt(String(row.reservation_operation_count));
-        liveBytes += BigInt(String(row.reservation_byte_count));
-      }
-      const counter = counters[0];
-      if (
-        !counter ||
-        BigInt(String(counter.operation_count)) !== BigInt(quota.operationCount) ||
-        BigInt(String(counter.byte_count)) !== BigInt(quota.byteCount) ||
-        BigInt(String(counter.reserved_operation_count)) !==
-          BigInt(quota.reservedOperationCount) + liveOperations ||
-        BigInt(String(counter.reserved_byte_count)) !==
-          BigInt(quota.reservedByteCount) + liveBytes ||
-        BigInt(String(counter.row_version)) !==
-          BigInt(quota.rowVersion) + BigInt(liveRows.length)
-      ) {
-        throw new Error(
-          "Authority quota counters diverge from their relational anchors.",
-        );
-      }
-    }
-  };
-
+  const graphError = (component: string): Error =>
+    new Error(
+      `The relational authority graph is incomplete or ambiguous (${component}).`,
+    );
 
   /**
-   * The relational authority graph is load-bearing: every snapshot component
-   * must equal its relational rows (conversation projection, sender
-   * membership, selected send grant, witnessed policy head, roster and
-   * recipient projections, usage). Divergence in either direction is
-   * corruption and fails closed.
+   * Reconstructs the locked append-authority snapshot from the relational
+   * authority graph - the rows ARE the snapshot. The custody row supplies
+   * only the lane lock, the active signing key, and the persisted snapshot
+   * digest, which the reconstruction must reproduce exactly; any divergence
+   * between the graph and the fence fails closed. Quota counters subtract
+   * live reservation deltas so the reconstruction reflects the pre-reserve
+   * base the digest fence was computed over.
    */
-  const assertRelationalAuthorityGraph = async (
-    tx: TransactionSql,
-    snapshot: LockedApplicationAppendSnapshot,
-    rosterCanonical: unknown,
-    recipientsCanonical: unknown,
-  ): Promise<void> => {
-    const fail = (component: string): never => {
-      throw new Error(
-        `Authority snapshot diverges from the relational authority graph (${component}).`,
-      );
-    };
-    const conversation = snapshot.conversation;
-    const conversationRows = await tx`
-      SELECT delivery_purpose, generation, state, epoch, roster_version,
-             roster_hash, recipient_set_version, recipient_set_hash,
-             confirmed_transcript_hash, last_position, current_log_head_hash,
-             last_policy_head_sequence, current_policy_head_hash,
-             quota_policy_digest, group_id_hash, realm_id, project_scope_id,
-             tenant_scope_id, etag, release_profile_id, delivery_limits_digest,
-             release_trust_root_digest
-      FROM conversations WHERE conversation_id = ${conversation.conversationId}`;
-    const row = conversationRows[0];
-    if (
-      !row ||
-      String(row.delivery_purpose) !== conversation.kind ||
-      String(row.generation) !== conversation.generation ||
-      String(row.state) !== conversation.state ||
-      String(row.epoch) !== conversation.epoch ||
-      String(row.roster_version) !== conversation.rosterVersion ||
-      b64(row.roster_hash) !== conversation.rosterHash ||
-      String(row.recipient_set_version) !== conversation.recipientSetVersion ||
-      b64(row.recipient_set_hash) !== conversation.recipientSetHash ||
-      b64(row.confirmed_transcript_hash) !== conversation.confirmedTranscriptHash ||
-      String(row.last_position) !== conversation.lastPosition ||
-      b64(row.current_log_head_hash) !== conversation.currentLogHeadHash ||
-      String(row.last_policy_head_sequence) !==
-        conversation.currentPolicyHeadSequence ||
-      b64(row.current_policy_head_hash) !== conversation.currentPolicyHeadHash ||
-      b64(row.quota_policy_digest) !== conversation.quotaPolicyDigest ||
-      b64(row.group_id_hash) !== conversation.groupIdHash ||
-      String(row.realm_id) !== conversation.realmId ||
-      String(row.project_scope_id) !== conversation.projectScopeId ||
-      String(row.tenant_scope_id) !== conversation.tenantScopeId ||
-      String(row.etag) !== conversation.etag ||
-      String(row.release_profile_id) !== conversation.releaseProfileId ||
-      b64(row.delivery_limits_digest) !== conversation.deliveryLimitsDigest ||
-      b64(row.release_trust_root_digest) !== conversation.releaseTrustRootDigest
-    ) {
-      fail("conversation");
-    }
-    const membership = snapshot.membership;
-    const membershipRows = await tx`
-      SELECT m.joined_position, m.removed_position, m.account_id,
-             c.credential_fingerprint, c.revocation_version,
-             c.state AS credential_state, c.expires_at, i.status
-      FROM memberships m
-      JOIN role_credentials c ON c.credential_id = m.credential_id
-      JOIN installations i ON i.installation_id = m.installation_id
-      WHERE m.conversation_id = ${membership.conversationId}
-        AND m.installation_id = ${membership.installationId}
-        AND m.credential_id = ${membership.credentialId}`;
-    const memberRow = membershipRows[0];
-    if (
-      !memberRow ||
-      String(memberRow.account_id) !== membership.accountId ||
-      String(memberRow.joined_position) !== membership.joinedPosition ||
-      (memberRow.removed_position === null
-        ? membership.removedPosition !== null
-        : String(memberRow.removed_position) !== membership.removedPosition) ||
-      b64(memberRow.credential_fingerprint) !== membership.credentialFingerprint ||
-      String(memberRow.revocation_version) !==
-        membership.credentialRevocationVersion ||
-      String(memberRow.credential_state) !== membership.credentialState ||
-      iso(memberRow.expires_at) !== membership.credentialExpiresAt ||
-      String(memberRow.status) !== membership.installationState
-    ) {
-      fail("membership");
-    }
-    const sendGrant = snapshot.sendGrant;
-    const grantRows = await tx`
-      SELECT role, role_credential_id, role_credential_fingerprint,
-             role_credential_subject_account_id,
-             role_credential_subject_installation_id,
-             role_credential_valid_from, role_credential_valid_until,
-             capability, state, policy_revision, policy_head_sequence,
-             policy_head_hash, expires_at, grant_evidence_digest,
-             grant_inclusion_evidence_digest, conversation_generation
-      FROM conversation_send_grants
-      WHERE conversation_id = ${sendGrant.conversationId}
-        AND installation_id = ${sendGrant.installationId}
-        AND credential_id = ${sendGrant.credentialId}`;
-    const grantRow = grantRows[0];
-    if (
-      !grantRow ||
-      String(grantRow.role) !== sendGrant.role ||
-      String(grantRow.role_credential_id) !== sendGrant.roleCredentialId ||
-      b64(grantRow.role_credential_fingerprint) !==
-        sendGrant.roleCredentialFingerprint ||
-      String(grantRow.role_credential_subject_account_id) !==
-        sendGrant.roleCredentialSubjectAccountId ||
-      String(grantRow.role_credential_subject_installation_id) !==
-        sendGrant.roleCredentialSubjectInstallationId ||
-      iso(grantRow.role_credential_valid_from) !==
-        sendGrant.roleCredentialValidFrom ||
-      iso(grantRow.role_credential_valid_until) !==
-        sendGrant.roleCredentialValidUntil ||
-      String(grantRow.capability) !== sendGrant.capability ||
-      String(grantRow.state) !== sendGrant.state ||
-      String(grantRow.policy_revision) !== sendGrant.policyRevision ||
-      String(grantRow.policy_head_sequence) !== sendGrant.policyHeadSequence ||
-      b64(grantRow.policy_head_hash) !== sendGrant.policyHeadHash ||
-      iso(grantRow.expires_at) !== sendGrant.expiresAt ||
-      b64(grantRow.grant_evidence_digest) !== sendGrant.grantEvidenceDigest ||
-      b64(grantRow.grant_inclusion_evidence_digest) !==
-        sendGrant.grantInclusionEvidenceDigest ||
-      String(grantRow.conversation_generation) !==
-        sendGrant.conversationGeneration
-    ) {
-      fail("send-grant");
-    }
-    const head = snapshot.policyHead;
-    const headRows = await tx`
-      SELECT * FROM delivery_policy_head_anchors
-      WHERE conversation_id = ${head.conversationId}`;
-    const headRow = headRows[0];
-    if (
-      !headRow ||
-      String(headRow.policy_head_id) !== head.policyHeadId ||
-      String(headRow.policy_head_sequence) !== head.policyHeadSequence ||
-      b64(headRow.policy_head_hash) !== head.policyHeadHash ||
-      String(headRow.delivery_log_position) !== head.deliveryLogPosition ||
-      b64(headRow.delivery_log_head_hash) !== head.deliveryLogHeadHash ||
-      String(headRow.evaluation_log_position) !== head.evaluationLogPosition ||
-      b64(headRow.evaluation_log_head_hash) !== head.evaluationLogHeadHash ||
-      String(headRow.epoch) !== head.epoch ||
-      String(headRow.roster_version) !== head.rosterVersion ||
-      b64(headRow.confirmed_transcript_hash) !== head.confirmedTranscriptHash ||
-      String(headRow.policy_revision) !== head.policyRevision ||
-      b64(headRow.signed_body_sha256) !== head.signedBodySha256 ||
-      String(headRow.signer_key_id) !== head.signerKeyId ||
-      b64(headRow.signature_sha256) !== head.signatureSha256 ||
-      b64(headRow.witness_evidence_digest) !== head.witnessEvidenceDigest ||
-      b64(headRow.proof_evidence_digest) !== head.proofEvidenceDigest ||
-      b64(headRow.policy_consistency_evidence_digest) !==
-        head.policyConsistencyEvidenceDigest ||
-      iso(headRow.proof_verified_at) !== head.proofVerifiedAt ||
-      iso(headRow.issued_at) !== head.issuedAt ||
-      iso(headRow.expires_at) !== head.expiresAt ||
-      String(headRow.witness_state) !== head.witnessState ||
-      (headRow.witness_checkpoint_id === null
-        ? head.witnessCheckpointId !== null
-        : String(headRow.witness_checkpoint_id) !== head.witnessCheckpointId) ||
-      (headRow.witnessed_policy_head_hash === null
-        ? head.witnessedPolicyHeadHash !== null
-        : b64(headRow.witnessed_policy_head_hash) !==
-          head.witnessedPolicyHeadHash) ||
-      String(headRow.mandatory_proposal_count) !== head.mandatoryProposalCount ||
-      b64(headRow.mandatory_proposal_set_hash) !==
-        head.mandatoryProposalSetHash ||
-      b64(headRow.authorized_send_grant_set_hash) !==
-        head.authorizedSendGrantSetHash ||
-      b64(headRow.selected_send_grant_evidence_digest) !==
-        head.selectedSendGrantEvidenceDigest ||
-      b64(headRow.selected_send_grant_inclusion_evidence_digest) !==
-        head.selectedSendGrantInclusionEvidenceDigest ||
-      b64(headRow.authorized_quota_policy_digest) !==
-        head.authorizedQuotaPolicyDigest ||
-      String(headRow.prior_policy_head_sequence) !==
-        head.priorPolicyHeadSequence ||
-      b64(headRow.prior_policy_head_hash) !== head.priorPolicyHeadHash ||
-      String(headRow.prior_policy_witness_checkpoint_id) !==
-        head.priorPolicyWitnessCheckpointId ||
-      b64(headRow.prior_policy_witness_evidence_digest) !==
-        head.priorPolicyWitnessEvidenceDigest
-    ) {
-      fail("policy-head");
-    }
-    const rosterEntries = (
-      Array.isArray(rosterCanonical) ? rosterCanonical : []
-    ) as readonly Record<string, unknown>[];
-    const rosterRows = await tx`
-      SELECT installation_id, account_id, credential_id, credential_fingerprint,
-             conversation_generation, roster_version
-      FROM conversation_roster_projections
-      WHERE conversation_id = ${conversation.conversationId}`;
-    if (rosterRows.length !== rosterEntries.length) fail("roster-projection");
-    for (const entry of rosterEntries) {
-      const match = rosterRows.find(
-        (candidate) =>
-          String(candidate.installation_id) === String(entry.installationId),
-      );
-      if (
-        !match ||
-        String(match.account_id) !== String(entry.accountId) ||
-        String(match.credential_id) !== String(entry.credentialId) ||
-        b64(match.credential_fingerprint) !== String(entry.credentialFingerprint) ||
-        String(match.conversation_generation) !==
-          String(entry.conversationGeneration) ||
-        String(match.roster_version) !== String(entry.rosterVersion)
-      ) {
-        fail("roster-projection");
-      }
-    }
-    const recipientEntries = (
-      Array.isArray(recipientsCanonical) ? recipientsCanonical : []
-    ) as readonly Record<string, unknown>[];
-    const recipientRows = await tx`
-      SELECT installation_id, account_id, credential_id, credential_fingerprint,
-             credential_revocation_version, credential_state,
-             credential_expires_at, joined_position, removed_position,
-             installation_state, conversation_generation, recipient_set_version
-      FROM conversation_recipient_projections
-      WHERE conversation_id = ${conversation.conversationId}`;
-    if (recipientRows.length !== recipientEntries.length) {
-      fail("recipient-projection");
-    }
-    for (const entry of recipientEntries) {
-      const match = recipientRows.find(
-        (candidate) =>
-          String(candidate.installation_id) === String(entry.installationId),
-      );
-      if (
-        !match ||
-        String(match.account_id) !== String(entry.accountId) ||
-        String(match.credential_id) !== String(entry.credentialId) ||
-        b64(match.credential_fingerprint) !== String(entry.credentialFingerprint) ||
-        String(match.credential_revocation_version) !==
-          String(entry.credentialRevocationVersion) ||
-        String(match.credential_state) !== String(entry.credentialState) ||
-        iso(match.credential_expires_at) !== String(entry.credentialExpiresAt) ||
-        String(match.joined_position) !== String(entry.joinedPosition) ||
-        (match.removed_position === null
-          ? entry.removedPosition !== null
-          : String(match.removed_position) !== String(entry.removedPosition)) ||
-        String(match.installation_state) !== String(entry.installationState) ||
-        String(match.conversation_generation) !==
-          String(entry.conversationGeneration) ||
-        String(match.recipient_set_version) !== String(entry.recipientSetVersion)
-      ) {
-        fail("recipient-projection");
-      }
-    }
-    const usageRows = await tx`
-      SELECT envelope_count, envelope_bytes, attachment_bytes
-      FROM conversation_usage
-      WHERE conversation_id = ${conversation.conversationId}`;
-    const usageRow = usageRows[0];
-    if (
-      !usageRow ||
-      String(usageRow.envelope_count) !== snapshot.usage.envelopeCount ||
-      String(usageRow.envelope_bytes) !== snapshot.usage.envelopeBytes ||
-      String(usageRow.attachment_bytes) !== snapshot.usage.attachmentBytes
-    ) {
-      fail("usage");
-    }
-  };
-
   const loadAuthority = async (
     tx: TransactionSql,
     conversationId: ConversationId,
     lock: boolean,
+    sender?: { readonly installationId: string },
   ): Promise<AuthorityRow | null> => {
-    const rows = lock
+    const custody = lock
       ? await tx`
-          SELECT a.snapshot_canonical, a.snapshot_digest, a.realm_id,
-                 a.mls_roster_canonical, a.recipient_projections_canonical,
-                 a.active_signing_key_id, a.row_version, k.valid_until
+          SELECT a.snapshot_digest, a.realm_id, a.active_signing_key_id,
+                 a.row_version, k.valid_until
           FROM delivery_conversation_authority a
           JOIN delivery_log_signing_keys k ON k.key_id = a.active_signing_key_id
           WHERE a.conversation_id = ${conversationId}
           FOR UPDATE OF a`
       : await tx`
-          SELECT a.snapshot_canonical, a.snapshot_digest, a.realm_id,
-                 a.mls_roster_canonical, a.recipient_projections_canonical,
-                 a.active_signing_key_id, a.row_version, k.valid_until
+          SELECT a.snapshot_digest, a.realm_id, a.active_signing_key_id,
+                 a.row_version, k.valid_until
           FROM delivery_conversation_authority a
           JOIN delivery_log_signing_keys k ON k.key_id = a.active_signing_key_id
           WHERE a.conversation_id = ${conversationId}`;
-    if (rows.length === 0) return null;
-    const row = rows[0];
-    const snapshot = parseLockedApplicationAppendSnapshot(canonicalJson(row.snapshot_canonical));
-    const snapshotDigest = computeLockedApplicationAppendSnapshotDigest(snapshot);
-    if (snapshotDigest !== b64(row.snapshot_digest)) {
-      throw new Error("Authority snapshot custody digest is inconsistent.");
+    if (custody.length === 0) return null;
+    const custodyRow = custody[0];
+
+    const conversationRows = await tx`
+      SELECT * FROM conversations WHERE conversation_id = ${conversationId}`;
+    if (conversationRows.length !== 1) throw graphError("conversation");
+    const c = conversationRows[0];
+
+    const grantRows = sender
+      ? await tx`
+          SELECT * FROM conversation_send_grants
+          WHERE conversation_id = ${conversationId}
+            AND installation_id = ${sender.installationId}`
+      : await tx`
+          SELECT * FROM conversation_send_grants
+          WHERE conversation_id = ${conversationId}`;
+    if (grantRows.length !== 1) throw graphError("send-grant");
+    const g = grantRows[0];
+
+    const memberRows = await tx`
+      SELECT m.account_id, m.installation_id, m.credential_id,
+             m.joined_position, m.removed_position, rc.credential_fingerprint,
+             rc.revocation_version, rc.state AS credential_state,
+             rc.expires_at, i.status
+      FROM memberships m
+      JOIN role_credentials rc ON rc.credential_id = m.credential_id
+      JOIN installations i ON i.installation_id = m.installation_id
+      WHERE m.conversation_id = ${conversationId}
+        AND m.installation_id = ${String(g.installation_id)}`;
+    if (memberRows.length !== 1) throw graphError("membership");
+    const m = memberRows[0];
+
+    const headRows = await tx`
+      SELECT * FROM delivery_policy_head_anchors
+      WHERE conversation_id = ${conversationId}`;
+    if (headRows.length !== 1) throw graphError("policy-head");
+    const h = headRows[0];
+
+    const pendingRemovals = await tx`
+      SELECT count(*)::int AS total FROM membership_intents
+      WHERE conversation_id = ${conversationId} AND operation = 'remove'
+        AND state IN ('requested', 'authorized', 'proposed')`;
+
+    const usageRows = await tx`
+      SELECT * FROM conversation_usage
+      WHERE conversation_id = ${conversationId}`;
+    if (usageRows.length !== 1) throw graphError("usage");
+    const u = usageRows[0];
+
+    const bindingRows = await tx`
+      SELECT * FROM conversation_quota_bindings
+      WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
+    if (bindingRows.length === 0) throw graphError("quota-bindings");
+
+    const quotaBindings: Record<string, unknown>[] = [];
+    const quotas: Record<string, unknown>[] = [];
+    for (const binding of bindingRows) {
+      const identity = {
+        scope: String(binding.scope_type),
+        scopeHash: b64(binding.scope_hash as Uint8Array),
+        quotaName: String(binding.quota_name),
+        windowStartedAt: iso(binding.window_started_at as Date),
+        windowSeconds: String(binding.window_seconds),
+        operationLimit: String(binding.operation_limit),
+        byteLimit: String(binding.byte_limit),
+      };
+      quotaBindings.push(identity);
+      const counters = await tx`
+        SELECT operation_count, byte_count, reserved_operation_count,
+               reserved_byte_count, row_version
+        FROM quota_counters
+        WHERE scope_type = ${String(binding.scope_type)}
+          AND scope_hash = ${binding.scope_hash as Buffer}
+          AND quota_name = ${String(binding.quota_name)}
+          AND window_started_at = ${binding.window_started_at as Date}`;
+      if (counters.length !== 1) throw graphError("quota-counter");
+      const counter = counters[0];
+      const liveRows = await tx`
+        SELECT reservation_operation_count, reservation_byte_count
+        FROM application_append_quota_reservations
+        WHERE state = 'live' AND scope_type = ${String(binding.scope_type)}
+          AND scope_hash = ${binding.scope_hash as Buffer}
+          AND quota_name = ${String(binding.quota_name)}
+          AND window_started_at = ${binding.window_started_at as Date}`;
+      let liveOperations = 0n;
+      let liveBytes = 0n;
+      for (const live of liveRows) {
+        liveOperations += BigInt(String(live.reservation_operation_count));
+        liveBytes += BigInt(String(live.reservation_byte_count));
+      }
+      quotas.push({
+        ...identity,
+        operationCount: String(counter.operation_count),
+        byteCount: String(counter.byte_count),
+        reservedOperationCount: String(
+          BigInt(String(counter.reserved_operation_count)) - liveOperations,
+        ),
+        reservedByteCount: String(
+          BigInt(String(counter.reserved_byte_count)) - liveBytes,
+        ),
+        rowVersion: String(
+          BigInt(String(counter.row_version)) - BigInt(liveRows.length),
+        ),
+      });
     }
-    await assertQuotaAnchors(tx, snapshot);
-    await assertRelationalAuthorityGraph(
-      tx,
-      snapshot,
-      canonicalJson(row.mls_roster_canonical),
-      canonicalJson(row.recipient_projections_canonical),
-    );
+
+    const rosterRows = await tx`
+      SELECT * FROM conversation_roster_projections
+      WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
+    if (rosterRows.length === 0) throw graphError("roster-projection");
+    const roster = rosterRows.map((row) => ({
+      conversationId,
+      conversationGeneration: String(row.conversation_generation),
+      rosterVersion: String(row.roster_version),
+      accountId: String(row.account_id),
+      installationId: String(row.installation_id),
+      credentialId: String(row.credential_id),
+      credentialFingerprint: b64(row.credential_fingerprint as Uint8Array),
+    }));
+
+    const recipientRows = await tx`
+      SELECT * FROM conversation_recipient_projections
+      WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
+    if (recipientRows.length === 0) throw graphError("recipient-projection");
+    const recipients = recipientRows.map((row) => ({
+      conversationId,
+      conversationGeneration: String(row.conversation_generation),
+      recipientSetVersion: String(row.recipient_set_version),
+      accountId: String(row.account_id),
+      installationId: String(row.installation_id),
+      credentialId: String(row.credential_id),
+      credentialFingerprint: b64(row.credential_fingerprint as Uint8Array),
+      credentialRevocationVersion: String(row.credential_revocation_version),
+      credentialState: String(row.credential_state),
+      credentialExpiresAt: iso(row.credential_expires_at as Date),
+      joinedPosition: String(row.joined_position),
+      removedPosition:
+        row.removed_position === null ? null : String(row.removed_position),
+      installationState: String(row.installation_state),
+    }));
+
+    const snapshot = parseLockedApplicationAppendSnapshot({
+      conversation: {
+        realmId: String(c.realm_id),
+        conversationId,
+        projectScopeId: String(c.project_scope_id),
+        tenantScopeId: String(c.tenant_scope_id),
+        kind: String(c.delivery_purpose),
+        generation: String(c.generation),
+        releaseProfileId: String(c.release_profile_id),
+        deliveryLimitsDigest: b64(c.delivery_limits_digest as Uint8Array),
+        releaseTrustRootDigest: b64(c.release_trust_root_digest as Uint8Array),
+        quotaPolicyDigest: b64(c.quota_policy_digest as Uint8Array),
+        groupIdHash: b64(c.group_id_hash as Uint8Array),
+        state: String(c.state),
+        etag: String(c.etag),
+        epoch: String(c.epoch),
+        rosterVersion: String(c.roster_version),
+        rosterHash: b64(c.roster_hash as Uint8Array),
+        recipientSetVersion: String(c.recipient_set_version),
+        recipientSetHash: b64(c.recipient_set_hash as Uint8Array),
+        confirmedTranscriptHash: b64(c.confirmed_transcript_hash as Uint8Array),
+        lastPosition: String(c.last_position),
+        currentLogHeadHash: b64(c.current_log_head_hash as Uint8Array),
+        currentPolicyHeadSequence: String(c.last_policy_head_sequence),
+        currentPolicyHeadHash: b64(c.current_policy_head_hash as Uint8Array),
+      },
+      membership: {
+        conversationId,
+        accountId: String(m.account_id),
+        installationId: String(m.installation_id),
+        credentialId: String(m.credential_id),
+        credentialFingerprint: b64(m.credential_fingerprint as Uint8Array),
+        credentialRevocationVersion: String(m.revocation_version),
+        installationState: String(m.status),
+        credentialState: String(m.credential_state),
+        credentialExpiresAt: iso(m.expires_at as Date),
+        joinedPosition: String(m.joined_position),
+        removedPosition:
+          m.removed_position === null ? null : String(m.removed_position),
+      },
+      policyHead: {
+        policyHeadId: String(h.policy_head_id),
+        conversationId,
+        policyHeadSequence: String(h.policy_head_sequence),
+        policyHeadHash: b64(h.policy_head_hash as Uint8Array),
+        deliveryLogPosition: String(h.delivery_log_position),
+        deliveryLogHeadHash: b64(h.delivery_log_head_hash as Uint8Array),
+        evaluationLogPosition: String(h.evaluation_log_position),
+        evaluationLogHeadHash: b64(h.evaluation_log_head_hash as Uint8Array),
+        epoch: String(h.epoch),
+        rosterVersion: String(h.roster_version),
+        confirmedTranscriptHash: b64(h.confirmed_transcript_hash as Uint8Array),
+        policyRevision: String(h.policy_revision),
+        signedBodySha256: b64(h.signed_body_sha256 as Uint8Array),
+        signerKeyId: String(h.signer_key_id),
+        signatureSha256: b64(h.signature_sha256 as Uint8Array),
+        witnessEvidenceDigest: b64(h.witness_evidence_digest as Uint8Array),
+        proofEvidenceDigest: b64(h.proof_evidence_digest as Uint8Array),
+        policyConsistencyEvidenceDigest: b64(
+          h.policy_consistency_evidence_digest as Uint8Array,
+        ),
+        proofVerifiedAt: iso(h.proof_verified_at as Date),
+        issuedAt: iso(h.issued_at as Date),
+        expiresAt: iso(h.expires_at as Date),
+        witnessState: String(h.witness_state),
+        witnessCheckpointId:
+          h.witness_checkpoint_id === null
+            ? null
+            : String(h.witness_checkpoint_id),
+        witnessedPolicyHeadHash:
+          h.witnessed_policy_head_hash === null
+            ? null
+            : b64(h.witnessed_policy_head_hash as Uint8Array),
+        mandatoryProposalCount: String(h.mandatory_proposal_count),
+        mandatoryProposalSetHash: b64(
+          h.mandatory_proposal_set_hash as Uint8Array,
+        ),
+        authorizedSendGrantSetHash: b64(
+          h.authorized_send_grant_set_hash as Uint8Array,
+        ),
+        selectedSendGrantEvidenceDigest: b64(
+          h.selected_send_grant_evidence_digest as Uint8Array,
+        ),
+        selectedSendGrantInclusionEvidenceDigest: b64(
+          h.selected_send_grant_inclusion_evidence_digest as Uint8Array,
+        ),
+        authorizedQuotaPolicyDigest: b64(
+          h.authorized_quota_policy_digest as Uint8Array,
+        ),
+        priorPolicyHeadSequence: String(h.prior_policy_head_sequence),
+        priorPolicyHeadHash: b64(h.prior_policy_head_hash as Uint8Array),
+        priorPolicyWitnessCheckpointId: String(
+          h.prior_policy_witness_checkpoint_id,
+        ),
+        priorPolicyWitnessEvidenceDigest: b64(
+          h.prior_policy_witness_evidence_digest as Uint8Array,
+        ),
+      },
+      sendGrant: {
+        conversationId,
+        installationId: String(g.installation_id),
+        credentialId: String(g.credential_id),
+        conversationKind: String(g.conversation_kind),
+        conversationGeneration: String(g.conversation_generation),
+        role: String(g.role),
+        roleCredentialId: String(g.role_credential_id),
+        roleCredentialFingerprint: b64(
+          g.role_credential_fingerprint as Uint8Array,
+        ),
+        roleCredentialSubjectAccountId: String(
+          g.role_credential_subject_account_id,
+        ),
+        roleCredentialSubjectInstallationId: String(
+          g.role_credential_subject_installation_id,
+        ),
+        roleCredentialValidFrom: iso(g.role_credential_valid_from as Date),
+        roleCredentialValidUntil: iso(g.role_credential_valid_until as Date),
+        capability: String(g.capability),
+        state: String(g.state),
+        policyRevision: String(g.policy_revision),
+        policyHeadSequence: String(g.policy_head_sequence),
+        policyHeadHash: b64(g.policy_head_hash as Uint8Array),
+        expiresAt: iso(g.expires_at as Date),
+        grantEvidenceDigest: b64(g.grant_evidence_digest as Uint8Array),
+        grantInclusionEvidenceDigest: b64(
+          g.grant_inclusion_evidence_digest as Uint8Array,
+        ),
+      },
+      pendingRemovalCount: String(pendingRemovals[0].total),
+      usage: {
+        conversationId,
+        envelopeCount: String(u.envelope_count),
+        envelopeBytes: String(u.envelope_bytes),
+        attachmentBytes: String(u.attachment_bytes),
+        envelopeCountLimit: String(u.envelope_count_limit),
+        envelopeBytesLimit: String(u.envelope_bytes_limit),
+        attachmentBytesLimit: String(u.attachment_bytes_limit),
+      },
+      quotaBindings,
+      quotas,
+    });
+    const snapshotDigest = computeLockedApplicationAppendSnapshotDigest(snapshot);
+    if (snapshotDigest !== b64(custodyRow.snapshot_digest)) {
+      throw new Error(
+        "Reconstructed authority snapshot does not match the custody digest fence.",
+      );
+    }
     return {
       snapshot,
       snapshotDigest,
-      realmId: row.realm_id,
-      mlsRosterCanonical: canonicalJson(row.mls_roster_canonical),
-      recipientProjectionsCanonical: canonicalJson(row.recipient_projections_canonical),
-      activeSigningKeyId: row.active_signing_key_id,
-      activeSigningKeyValidUntil: iso(row.valid_until),
-      rowVersion: String(row.row_version),
+      realmId: String(custodyRow.realm_id),
+      mlsRosterCanonical: roster,
+      recipientProjectionsCanonical: recipients,
+      activeSigningKeyId: String(custodyRow.active_signing_key_id),
+      activeSigningKeyValidUntil: iso(custodyRow.valid_until),
+      rowVersion: String(custodyRow.row_version),
     };
   };
+
 
   const loadPending = async (
     tx: TransactionSql,
@@ -666,6 +638,7 @@ export function createPostgresDeliveryAppendStore(
             tx,
             command.semanticIdentity.conversationId,
             false,
+            command.semanticIdentity.authenticatedSender,
           );
           if (!authority) return rejected("conversation-not-found");
           if (!commandTrustMatchesSnapshot(command, authority.snapshot)) {
@@ -706,6 +679,7 @@ export function createPostgresDeliveryAppendStore(
             tx,
             command.semanticIdentity.conversationId,
             true,
+            command.semanticIdentity.authenticatedSender,
           );
           const observedAt = await dbNow(tx);
           const accepted = await lookupAcceptedReplay(tx, command, observedAt);
@@ -886,6 +860,7 @@ export function createPostgresDeliveryAppendStore(
             tx,
             pending.envelope.conversationId,
             true,
+            pending.admissionCommand.semanticIdentity.authenticatedSender,
           );
           const observedAt = await dbNow(tx);
           const accepted = await lookupAcceptedReplay(tx, command, observedAt);
@@ -1057,7 +1032,6 @@ export function createPostgresDeliveryAppendStore(
 
           await tx`
             UPDATE delivery_conversation_authority SET
-              snapshot_canonical = ${JSON.stringify(nextSnapshot)}::jsonb,
               snapshot_digest = ${bytea(nextSnapshotDigest)},
               row_version = row_version + 1,
               updated_at = ${observedAt}::timestamptz
@@ -1238,6 +1212,7 @@ export function createPostgresDeliveryAppendStore(
             tx,
             pending.envelope.conversationId,
             true,
+            pending.admissionCommand.semanticIdentity.authenticatedSender,
           );
           const located = await loadPending(
             tx,
@@ -1340,7 +1315,6 @@ export function createPostgresDeliveryAppendStore(
           });
           await tx`
             UPDATE delivery_conversation_authority SET
-              snapshot_canonical = ${JSON.stringify(retiredSnapshot)}::jsonb,
               snapshot_digest = ${bytea(
                 computeLockedApplicationAppendSnapshotDigest(retiredSnapshot),
               )},

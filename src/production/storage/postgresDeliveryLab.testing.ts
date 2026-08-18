@@ -255,17 +255,19 @@ export async function seedPostgresDeliveryLab(
         ${conversation.recipientSetVersion},
         ${Buffer.from(conversation.recipientSetHash, "base64url")}
       )`;
-    for (const binding of snapshot.quotaBindings) {
+    for (const [ordinal, binding] of snapshot.quotaBindings.entries()) {
       await tx`
         INSERT INTO conversation_quota_bindings (
           conversation_id, quota_policy_digest, scope_type, scope_hash,
-          quota_name, window_seconds, operation_limit, byte_limit
+          quota_name, window_seconds, operation_limit, byte_limit,
+          ordinal, window_started_at
         ) VALUES (
           ${conversation.conversationId},
           ${Buffer.from(conversation.quotaPolicyDigest, "base64url")},
           ${binding.scope}, ${Buffer.from(binding.scopeHash, "base64url")},
           ${binding.quotaName}, ${binding.windowSeconds},
-          ${binding.operationLimit}, ${binding.byteLimit}
+          ${binding.operationLimit}, ${binding.byteLimit}, ${ordinal},
+          ${binding.windowStartedAt}::timestamptz
         ) ON CONFLICT DO NOTHING`;
     }
     await tx`
@@ -430,26 +432,27 @@ export async function seedPostgresDeliveryLab(
         ${Buffer.from(head.priorPolicyWitnessEvidenceDigest, "base64url")},
         ${now}::timestamptz
       )`;
-    for (const member of roster) {
+    for (const [ordinal, member] of roster.entries()) {
       await tx`
         INSERT INTO conversation_roster_projections (
           conversation_id, conversation_generation, roster_version,
-          account_id, installation_id, credential_id, credential_fingerprint
+          account_id, installation_id, credential_id, credential_fingerprint,
+          ordinal
         ) VALUES (
           ${member.conversationId}, ${member.conversationGeneration},
           ${member.rosterVersion}, ${member.accountId},
           ${member.installationId}, ${member.credentialId},
-          ${Buffer.from(member.credentialFingerprint, "base64url")}
+          ${Buffer.from(member.credentialFingerprint, "base64url")}, ${ordinal}
         )`;
     }
-    for (const recipient of recipients) {
+    for (const [ordinal, recipient] of recipients.entries()) {
       await tx`
         INSERT INTO conversation_recipient_projections (
           conversation_id, conversation_generation, recipient_set_version,
           account_id, installation_id, credential_id, credential_fingerprint,
           credential_revocation_version, credential_state,
           credential_expires_at, joined_position, removed_position,
-          installation_state
+          installation_state, ordinal
         ) VALUES (
           ${recipient.conversationId}, ${recipient.conversationGeneration},
           ${recipient.recipientSetVersion}, ${recipient.accountId},
@@ -458,16 +461,20 @@ export async function seedPostgresDeliveryLab(
           ${recipient.credentialRevocationVersion}, ${recipient.credentialState},
           ${recipient.credentialExpiresAt}::timestamptz,
           ${recipient.joinedPosition}, ${recipient.removedPosition},
-          ${recipient.installationState}
+          ${recipient.installationState}, ${ordinal}
         )`;
     }
     await tx`
       INSERT INTO conversation_usage (
-        conversation_id, envelope_count, envelope_bytes, attachment_bytes, updated_at
+        conversation_id, envelope_count, envelope_bytes, attachment_bytes,
+        envelope_count_limit, envelope_bytes_limit, attachment_bytes_limit,
+        updated_at
       ) VALUES (
         ${conversation.conversationId}, ${snapshot.usage.envelopeCount},
         ${snapshot.usage.envelopeBytes}, ${snapshot.usage.attachmentBytes},
-        ${now}::timestamptz
+        ${snapshot.usage.envelopeCountLimit},
+        ${snapshot.usage.envelopeBytesLimit},
+        ${snapshot.usage.attachmentBytesLimit}, ${now}::timestamptz
       )`;
     for (const [index, attachmentValue] of (
       seedValue.attachments as readonly Record<string, unknown>[]
@@ -488,18 +495,15 @@ export async function seedPostgresDeliveryLab(
     }
     await tx`
       INSERT INTO delivery_conversation_authority (
-        conversation_id, conversation_generation, realm_id,
-        snapshot_canonical, snapshot_digest, mls_roster_canonical,
-        recipient_projections_canonical, active_signing_key_id,
-        updated_at
+        conversation_id, conversation_generation, realm_id, snapshot_digest,
+        active_signing_key_id, updated_at
       ) VALUES (
         ${conversation.conversationId}, ${conversation.generation},
-        ${conversation.realmId}, ${JSON.stringify(snapshot)}::jsonb,
+        ${conversation.realmId},
         ${Buffer.from(
           computeLockedApplicationAppendSnapshotDigest(snapshot),
           "base64url",
         )},
-        ${JSON.stringify(roster)}::jsonb, ${JSON.stringify(recipients)}::jsonb,
         ${signingKeyId}, ${now}::timestamptz
       )`;
   });
