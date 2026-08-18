@@ -243,10 +243,21 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       page end). Lab suite four: full lifecycle over real Requests with
       real SIWE/possession/DPoP crypto. Wallet verification stays 503
       unavailable until chain adapters ship.
-- [ ] Then: RPC finality + purchase adapters (needs ENG-004 profile
-      ratification); append route (needs release-pinned verifier
+- [x] ENG-004 + chain adapters: ADR 0005 ratifies finality profiles for
+      all eight chains (finalized-tag only, 2-provider quorum with hash
+      agreement under the LOWEST head, 60s recheck, reorg pauses the
+      profile, jbm-evm-adapter.1 digest conventions);
+      config/finality-profiles.v1.json + seed script. Adapters in
+      src/production/chain/: finality canonicality verifier, canonical
+      purchase verifier (payment-beneficiary path proven end to end
+      against the strict kernel parser; tier path not-configured), and
+      the quorum wallet-proof verifier (EOA only; contract wallets
+      unavailable). JBM_RPC_ENDPOINTS wires EOA enrollment live.
+- [ ] Then: eligibility purchase-claim HTTP route (needs a SIGNED
+      deployment manifest lane); append route (release-pinned verifier
       adapters, spec-mandated unconfigured); push notifications;
-      KeyPackage publication + conversation planning routes.
+      KeyPackage publication + conversation planning routes; grant
+      recheck keeper (60s cadence per ADR 0005).
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,
