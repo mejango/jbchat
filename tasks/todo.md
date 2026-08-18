@@ -44,12 +44,29 @@ codeable item.
       the in-memory lab and PG store on one contract. Remaining in-lane:
       attachments support, DB-authoritative timestamps, full relational
       authority graph replacing the custody row.
-- [ ] Unit 4: section-11.2 restore drill + failover evidence (operational)
+- [x] Unit 4 (037d168): section-11.2 restore drill in the lab — physical
+      pg_basebackup + WAL into an isolated cluster, checksum/hash-chain/
+      mailbox/acceptance verification from relational rows, identical
+      client-visible receipt, staged pending survives + drains. Cross-region
+      standby/WAL-archive/KMS/failover remain operational launch work.
+- [x] Unit 5 (ae83cdc): attachment measure/bind through the PG adapter with
+      reuse rejection proven.
+- [x] Unit 6 (4b38eac): embed context plane (issuance/redemption/session +
+      origin revocation) on the baseline embed tables, 7 pgtest scenarios.
+      OAuth/mTLS + cookie/Fetch-Metadata enforcement live in the HTTP layer.
 
 ## Phase 3 — production web surface
-- [ ] `/embed/{tenantPublicId}` route — SEQUENCED AFTER storage: the current
-      404 is an intentional, e2e-tested launch gate; the route may only land
-      together with real context issuance/redemption per embed-contract.md
+- [x] Unit 7: `/embed/{tenantPublicId}` production route + `/v1/embed/*`
+      same-origin BFF + EmbedProductionFrame handshake document. The
+      production-security release test now proves: 200 + nonce hydration +
+      bounded theme materialization + full authenticated postMessage
+      handshake under an allowed ancestor + browser-enforced refusal under
+      an unlisted ancestor + fail-closed context-invalid redemption when the
+      context plane is unconfigured. Unknown tenants and query-bearing
+      requests remain the class-based 404. The BFF's redeemed path (cookie,
+      session read/delete, replay collapse) is proven against PostgreSQL in
+      the storage lab's embedBff suite. Remaining for a real integration:
+      run the redeemed path in a deployed browser with a configured plane.
 - [ ] Host SDK stub + launcher contract per embed-contract.md
 
 ## Phase 4 — identity & chain authority

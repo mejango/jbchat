@@ -6,15 +6,17 @@ export const FIXTURE_EMBED_PARENT_ORIGIN = "https://fictional-host.example";
 export const FIXTURE_EMBED_FRAME_AUDIENCE =
   "https://messages.fictional.example/embed";
 export const FIXTURE_EMBED_HOST_CLIENT_ID = "fictional-host-production";
-const TENANT_ID = "00000000-0000-4000-8000-000000000a01";
-const ORIGIN_ID = "00000000-0000-4000-8000-000000000a02";
-const ISSUER_CLIENT_ID = "00000000-0000-4000-8000-000000000a03";
 
 /** Seeds one active, ownership-verified fictional embed tenant. */
 export async function seedEmbedTenantFixture(
   sql: Sql,
   now: string,
+  tenantPublicId: string = FIXTURE_EMBED_TENANT_PUBLIC_ID,
+  idByte = "a",
 ): Promise<void> {
+  const TENANT_ID = `00000000-0000-4000-8000-000000000${idByte}01`;
+  const ORIGIN_ID = `00000000-0000-4000-8000-000000000${idByte}02`;
+  const ISSUER_CLIENT_ID = `00000000-0000-4000-8000-000000000${idByte}03`;
   await sql.begin(async (tx) => {
     await tx`
       INSERT INTO tenants (
@@ -22,7 +24,7 @@ export async function seedEmbedTenantFixture(
         embed_theme_hash, top_level_destinations_hash, kms_key_ref,
         created_at, updated_at
       ) VALUES (
-        ${TENANT_ID}, ${FIXTURE_EMBED_TENANT_PUBLIC_ID}, 'active', 'active',
+        ${TENANT_ID}, ${tenantPublicId}, 'active', 'active',
         ${FIXTURE_EMBED_FRAME_AUDIENCE}, ${Buffer.alloc(32, 0xa1)},
         ${Buffer.alloc(32, 0xa2)}, 'fictional-kms', ${now}::timestamptz,
         ${now}::timestamptz

@@ -51,10 +51,16 @@ retain `frame-ancestors 'none'`. Because URL fragments never reach the server,
 the production frame route must also reject a non-empty fragment before it
 accepts initialization.
 
-The production `/embed/{tenantPublicId}` application route is not implemented
-yet. A configured path currently returns the class-based 404 page while still
-receiving its route-specific response policy. This is an intentional, tested
-launch gate; a header-only 404 is not evidence that an integration works.
+The production `/embed/{tenantPublicId}` application route renders the
+fail-closed frame document for configured tenants only: it resolves the
+tenant against the same build-time integration allowlist the header layer
+uses, refuses query-bearing requests with the class-based 404, and runs the
+bounded bootstrap/init handshake before redeeming the one-use context through
+the same-origin `/v1/embed/context-redemptions` BFF. Without the embed
+context plane configured (`JUICEBOX_MESSAGING_EMBED_DATABASE_URL` and
+`JUICEBOX_MESSAGING_EMBED_CONTEXT_SECRET`), every redemption collapses to the
+generic context-invalid outcome after the channel is established, and
+unconfigured tenants remain the class-based 404.
 
 Frame documents override the global `Cross-Origin-Resource-Policy: same-origin`
 with `cross-origin`; the exact `frame-ancestors` directive remains the embedding
@@ -122,11 +128,13 @@ an intra-script sandbox: trusted nonce-authorized JavaScript can mutate CSSOM.
 - Keep every HTML/RSC route inside Proxy coverage and the dynamic root layout.
   Verify nonce-bearing hydration and Trusted Types in the deployed browser—not
   only unit tests—after every Next upgrade.
-- Implement the production tenant route before enabling any integration. Its
-  release test must require a 200 response, nonce-bearing hydration, bounded
-  custom-theme materialization, the authenticated `postMessage` handshake, a
-  successful iframe under each exact allowed ancestor, and browser-enforced
-  refusal under an unlisted ancestor. The local preview is not this test.
+- The production tenant route's automated release test now requires a 200
+  response, nonce-bearing hydration, bounded custom-theme materialization,
+  the authenticated `postMessage` handshake, an iframe under an allowed
+  ancestor, and browser-enforced refusal under an unlisted ancestor. Before
+  enabling a real integration, additionally run it against a configured
+  context plane so the redeemed path (not only the fail-closed
+  context-invalid path) is exercised end to end in a deployed browser.
 - Reject public embed requests with non-empty search or fragment data before
   context redemption, without breaking framework-owned internal RSC requests.
   The current header layer only makes queried paths non-embeddable. Configure
@@ -175,5 +183,6 @@ Next upgrades. It builds with the explicit production boundary, fronts the
 local server as the configured virtual HTTPS origin, and verifies root, shared,
 projects, and the custom 404 hydrate in Chromium with one fresh nonce per
 response, no missing script/style nonces, no `unsafe-inline`, and no CSP or
-Trusted Types failures. It also asserts that a configured but unimplemented
-production embed remains a 404 so the route cannot be mistaken for launch-ready.
+Trusted Types failures. It also drives the configured embed tenant through
+the allowed-ancestor handshake with fail-closed context redemption and
+asserts unconfigured and query-bearing embed paths remain 404.

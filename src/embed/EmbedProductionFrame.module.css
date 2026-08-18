@@ -1,0 +1,31 @@
+.frameRoot {
+  min-height: 100dvh;
+  box-sizing: border-box;
+  background: var(--embed-canvas, #f5f7fa);
+  color: var(--embed-text, #17203a);
+  font-family: var(--embed-font-family, system-ui, sans-serif);
+}
+
+.frameMain {
+  display: grid;
+  min-height: 100dvh;
+  box-sizing: border-box;
+  place-content: center;
+  justify-items: center;
+  padding: 28px;
+  text-align: center;
+}
+
+.frameTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.frameDetail {
+  margin: 8px 0 0;
+  max-width: 42ch;
+  color: var(--embed-text-soft, #4c5872);
+  font-size: 12px;
+  line-height: 1.5;
+}

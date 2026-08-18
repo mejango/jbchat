@@ -54,7 +54,12 @@ cursor API. This exercises the product flow; it is not a secure messenger.
 | `/embed-preview` | Paired-loopback cross-origin bridge and theme lab | Localhost/127.0.0.1 only; no context redemption, auth, entitlement, encryption, or production tenant |
 | `/embed-preview/frame` | Internal frame used by the embed harness | Not a standalone user entry point |
 
-The production route `/embed/{tenantPublicId}` is specified but not implemented.
+The production route `/embed/{tenantPublicId}` renders the fail-closed tenant
+frame for build-configured tenants, with one-use context redemption served by
+the PostgreSQL embed context plane when
+`JUICEBOX_MESSAGING_EMBED_DATABASE_URL` and
+`JUICEBOX_MESSAGING_EMBED_CONTEXT_SECRET` are configured; deployments without
+that plane collapse every redemption to the generic context-invalid outcome.
 The preview frame must not be presented as a Juicebox or Revnet integration.
 
 ## Run locally

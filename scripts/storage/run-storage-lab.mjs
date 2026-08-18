@@ -673,6 +673,7 @@ async function main() {
         "--config",
         "vitest.storage.config.ts",
         "src/production/embed/embedContextStore.pgtest.ts",
+        "src/production/embed/embedBff.pgtest.ts",
       ],
       {
         env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },

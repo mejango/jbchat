@@ -406,27 +406,115 @@ test("documents hydrate under strict production CSP and absent embeds stay expli
 
   expect(observedNonces.size).toBe(4);
 
-  await context.route("https://juicebox.money/security-host", async (route) => {
-    await route.fulfill({
-      body: `<!doctype html><title>Allowed embed security host</title><iframe title="Configured embed launch gate" src="${PUBLIC_ORIGIN}/embed/juicebox"></iframe>`,
-      contentType: "text/html",
+  const embedHostHarness = `<!doctype html><title>Allowed embed security host</title>
+<script>
+  window.__embedEvents = [];
+  const FRAME_ORIGIN = ${JSON.stringify(PUBLIC_ORIGIN)};
+  const randomBase64Url = (byteLength) => {
+    const bytes = new Uint8Array(byteLength);
+    crypto.getRandomValues(bytes);
+    return btoa(String.fromCharCode(...bytes))
+      .replaceAll("+", "-")
+      .replaceAll("/", "_")
+      .replace(/=+$/, "");
+  };
+  const channelId = randomBase64Url(32);
+  const parentNonce = randomBase64Url(32);
+  const requestId = randomBase64Url(16);
+  const contextHandle = randomBase64Url(32);
+  let initialized = false;
+  window.addEventListener("message", (event) => {
+    if (event.origin !== FRAME_ORIGIN) return;
+    const data = event.data;
+    if (!data || typeof data.type !== "string") return;
+    window.__embedEvents.push({
+      type: data.type,
+      code: data.payload && data.payload.code,
     });
+    if (data.type === "frame.bootstrap_ready" && !initialized) {
+      initialized = true;
+      event.source.postMessage(
+        {
+          protocol: "org.juicebox.messaging.embed",
+          version: 1,
+          channelId,
+          sequence: 0,
+          requestId,
+          type: "host.init",
+          payload: {
+            bootstrapNonce: data.bootstrapNonce,
+            parentNonce,
+            contextHandle,
+            locale: "en",
+            theme: { version: 1, preset: "juicebox", cornerStyle: "square" },
+          },
+        },
+        FRAME_ORIGIN,
+      );
+    }
+  });
+</script>
+<iframe title="Configured embed launch gate" src="${PUBLIC_ORIGIN}/embed/juicebox" sandbox="allow-scripts allow-same-origin" referrerpolicy="origin" allow=""></iframe>`;
+  await context.route("https://juicebox.money/security-host", async (route) => {
+    await route.fulfill({ body: embedHostHarness, contentType: "text/html" });
   });
   const allowedAncestorPage = await context.newPage();
   await allowedAncestorPage.goto("https://juicebox.money/security-host", {
-    waitUntil: "networkidle",
+    waitUntil: "domcontentloaded",
   });
-  const absentEmbedFrame = allowedAncestorPage.frames().find(
+  await expect
+    .poll(
+      () =>
+        allowedAncestorPage
+          .frames()
+          .some((frame) => frame.url() === `${PUBLIC_ORIGIN}/embed/juicebox`),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  const liveEmbedFrame = allowedAncestorPage.frames().find(
     (frame) => frame.url() === `${PUBLIC_ORIGIN}/embed/juicebox`,
-  );
-  expect(absentEmbedFrame).toBeDefined();
-  await expect(
-    allowedAncestorPage
-      .frameLocator('iframe[title="Configured embed launch gate"]')
-      .getByRole("heading", { name: "This page is not available." }),
-  ).toBeVisible();
+  )!;
+  expect(liveEmbedFrame).toBeDefined();
+  // The release gate: the frame document hydrates under an allowed ancestor
+  // and completes the authenticated postMessage handshake. Without a
+  // configured context plane, redemption fails closed as the one generic
+  // context-invalid outcome after the channel is established.
+  await expect
+    .poll(
+      () =>
+        allowedAncestorPage.evaluate(() => {
+          const host = window as typeof window & {
+            __embedEvents?: { type: string; code?: string }[];
+          };
+          return (host.__embedEvents ?? []).map(
+            (event) => `${event.type}${event.code ? `:${event.code}` : ""}`,
+          );
+        }),
+      { timeout: 15_000 },
+    )
+    .toEqual([
+      "frame.bootstrap_ready",
+      "frame.ready",
+      "frame.layout",
+      "frame.error:context-invalid",
+    ]);
   expect(
-    await absentEmbedFrame!.evaluate(() => {
+    await liveEmbedFrame!.evaluate(() => {
+      const themedRoot = document.querySelector('[data-embed-custom-theme="v1"]');
+      const ownedStyles = Array.from(
+        document.querySelectorAll<HTMLStyleElement>(
+          '[data-embed-custom-theme="v1"] style',
+        ),
+      );
+      return {
+        themed: themedRoot !== null,
+        ownedStyleCount: ownedStyles.length,
+        stylesWithoutNonce: ownedStyles.filter((style) => !style.nonce).length,
+      };
+    }),
+  ).toEqual({ themed: true, ownedStyleCount: 1, stylesWithoutNonce: 0 });
+  expect(
+    await liveEmbedFrame!.evaluate(() => {
       const observedWindow = window as typeof window & {
         __pwaRegistrationAttempts?: unknown[];
         __serviceWorkerPolicyAudits?: unknown[];
@@ -439,16 +527,38 @@ test("documents hydrate under strict production CSP and absent embeds stay expli
   ).toEqual({ policyAudits: [], registrationAttempts: [] });
   await allowedAncestorPage.close();
 
+  await context.route("https://attacker.example/security-host", async (route) => {
+    await route.fulfill({
+      body: `<!doctype html><title>Unlisted embed ancestor</title><iframe title="Refused embed" src="${PUBLIC_ORIGIN}/embed/juicebox"></iframe>`,
+      contentType: "text/html",
+    });
+  });
+  const unlistedAncestorPage = await context.newPage();
+  await unlistedAncestorPage.goto("https://attacker.example/security-host", {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(
+    unlistedAncestorPage
+      .frameLocator('iframe[title="Refused embed"]')
+      .getByRole("heading", { name: "Juicebox secure messaging" }),
+  ).not.toBeVisible();
+  await unlistedAncestorPage.close();
+
   const embedResponse = await fetch(`${LOCAL_ORIGIN}/embed/juicebox`, {
     headers: {
       "x-forwarded-host": "messages.example.com",
       "x-forwarded-proto": "https",
     },
   });
-  // The security contract is configured, but the production tenant route is
-  // intentionally not implemented yet. A 404 is a visible launch gate, not a
-  // successful embed smoke test.
-  expect(embedResponse.status).toBe(404);
+  expect(embedResponse.status).toBe(200);
+  const embedNonceMatch = /'nonce-([A-Za-z0-9+/=]+)'/.exec(
+    embedResponse.headers.get("content-security-policy") ?? "",
+  );
+  expect(embedNonceMatch).not.toBeNull();
+  observedNonces.add(embedNonceMatch![1]);
+  expect(observedNonces.size).toBe(5);
+  const embedBody = await embedResponse.clone().text();
+  expect(embedBody).toContain("Juicebox secure messaging");
   const embedCsp = embedResponse.headers.get("content-security-policy") ?? "";
   expect(embedCsp).toContain("frame-ancestors https://juicebox.money");
   expect(embedCsp).toContain("form-action 'none'");
