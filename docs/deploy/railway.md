@@ -27,9 +27,17 @@ Operational facts learned during the first deploy:
   quorum pairs Dwellir with drpc on mainnets/OP-Sepolia/Arb-Sepolia,
   Tenderly gateway on Ethereum Sepolia, and sepolia.base.org on Base
   Sepolia.
-- STILL MANUAL: the keeper cron (dashboard -> new service -> cron
-  `node scripts/keeper/recheck-grants.mjs`, 60s cadence) and the
-  delivery->witness checkpoint submission job (not yet built).
+- The `keeper` service (jbm-delivery, service e1c6b553) runs
+  `node scripts/keeper/run-keeper.mjs`: the ADR 0005 grant recheck on a
+  60-second loop and the delivery->witness submission loop every 15
+  seconds. Its start command lives in the service instance (set via the
+  GraphQL API - railway.json intentionally carries no startCommand so
+  per-service commands survive redeploys). The delivery log's PUBLIC key
+  is registered in the witness database as submitter
+  `jbm-delivery-log-2026q3`; receipts land in log_witness_receipts
+  automatically once conversations append.
+- Remaining manual: custom domains, and connecting GitHub auto-deploys
+  AFTER the owner pushes local main.
 
 
 Two Railway PROJECTS from this one repository — separation is the point,

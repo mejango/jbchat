@@ -266,11 +266,17 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       configured (RPC quorum Dwellir+drpc/Tenderly/base-official,
       signed manifest inline). Operational facts in
       docs/deploy/railway.md.
-- [ ] Then: keeper cron service on Railway (manual dashboard step);
-      delivery->witness checkpoint submission job; push notifications;
-      KeyPackage publication + conversation planning routes; append
-      route (release-pinned verifier adapters, spec-mandated
-      unconfigured); custom domains.
+- [x] Keeper service LIVE on Railway (no manual steps left): one
+      long-running process = grant recheck (60s) + delivery->witness
+      submission (15s); runDeliverySubmissionPass lab-proven against the
+      real witness core (in-order drain, per-conversation blocking,
+      idempotent passes); delivery submitter PUBLIC key registered in
+      the witness DB. Keeper start command set per-service via GraphQL
+      (railway.json carries no startCommand on purpose).
+- [ ] Then: push notifications; KeyPackage publication + conversation
+      planning routes; append route (release-pinned verifier adapters,
+      spec-mandated unconfigured); custom domains; GitHub auto-deploys
+      after push.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,
