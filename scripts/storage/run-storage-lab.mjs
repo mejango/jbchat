@@ -664,6 +664,24 @@ async function main() {
       "the PostgreSQL repository suite must pass",
     );
 
+    console.error("Running the embed context plane suite...");
+    const embedSuite = run(
+      "npx",
+      [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.storage.config.ts",
+        "src/production/embed/embedContextStore.pgtest.ts",
+      ],
+      {
+        env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
+        stdio: ["ignore", "inherit", "inherit"],
+        encoding: undefined,
+      },
+    );
+    assert.equal(embedSuite.status, 0, "the embed context plane suite must pass");
+
     await runRestoreDrill(labDirectory, port, databaseUrl);
 
     console.error("Storage lab passed. This is lab evidence only; G2 remains open.");
