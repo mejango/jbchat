@@ -300,6 +300,101 @@ async function runRestoreDrill(labDirectory, livePort, liveUrl) {
   }
 }
 
+async function runFailoverDrill(labDirectory, primaryDataDirectory, primaryPort, primaryUrl) {
+  const statePath = join(labDirectory, "failover-drill-state.json");
+  const drillFile = "src/production/storage/postgresFailoverDrill.pgtest.ts";
+  const prepare = run(
+    "npx",
+    ["vitest", "run", "--config", "vitest.storage.config.ts", drillFile],
+    {
+      env: {
+        ...process.env,
+        JBM_STORAGE_DATABASE_URL: primaryUrl,
+        JBM_FAILOVER_DRILL_PHASE: "prepare",
+        JBM_FAILOVER_DRILL_STATE: statePath,
+      },
+      stdio: ["ignore", "inherit", "inherit"],
+      encoding: undefined,
+    },
+  );
+  assert.equal(prepare.status, 0, "the failover drill prepare phase must pass");
+
+  const standbyDirectory = join(labDirectory, "standby-data");
+  const backup = run("pg_basebackup", [
+    "-h",
+    "127.0.0.1",
+    "-p",
+    String(primaryPort),
+    "-U",
+    LAB_USER,
+    "-D",
+    standbyDirectory,
+    "-X",
+    "stream",
+    "--checkpoint=fast",
+    "-R",
+  ]);
+  assert.equal(backup.status, 0, `standby pg_basebackup failed: ${backup.stderr}`);
+  const standbyPort = await freeLoopbackPort();
+  const startStandby = run("pg_ctl", [
+    "-D",
+    standbyDirectory,
+    "-o",
+    `-c listen_addresses=127.0.0.1 -c port=${standbyPort} -c unix_socket_directories='' -c fsync=off`,
+    "-l",
+    join(labDirectory, "standby-postgres.log"),
+    "-w",
+    "start",
+  ]);
+  assert.equal(startStandby.status, 0, `standby pg_ctl start failed: ${startStandby.stderr}`);
+  const standbyUrl = `postgresql://${LAB_USER}@127.0.0.1:${standbyPort}/${LAB_DATABASE}`;
+  try {
+    let replicated = false;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const rows = run("psql", [
+        "-X",
+        "-q",
+        "-tA",
+        "-c",
+        "SELECT count(*) FROM application_append_acceptances WHERE envelope_id = '6d5609f1-9662-49f6-9cda-9ef319abe51d'",
+        standbyUrl,
+      ]);
+      if (rows.status === 0 && rows.stdout.trim() === "1") {
+        replicated = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    assert.ok(replicated, "the standby must replay the primary's committed append");
+
+    // The primary dies without notice; only the streamed WAL survives.
+    run("pg_ctl", ["-D", primaryDataDirectory, "-m", "immediate", "stop"]);
+    const promote = run("pg_ctl", ["-D", standbyDirectory, "-w", "promote"]);
+    assert.equal(promote.status, 0, `standby promotion failed: ${promote.stderr}`);
+
+    const verify = run(
+      "npx",
+      ["vitest", "run", "--config", "vitest.storage.config.ts", drillFile],
+      {
+        env: {
+          ...process.env,
+          JBM_STORAGE_DATABASE_URL: standbyUrl,
+          JBM_FAILOVER_DRILL_PHASE: "verify",
+          JBM_FAILOVER_DRILL_STATE: statePath,
+        },
+        stdio: ["ignore", "inherit", "inherit"],
+        encoding: undefined,
+      },
+    );
+    assert.equal(verify.status, 0, "the failover drill verify phase must pass");
+    console.error(
+      "ok - failover drill: streamed standby promoted after primary loss, receipt identical, fresh append continues the chain",
+    );
+  } finally {
+    run("pg_ctl", ["-D", standbyDirectory, "-m", "immediate", "stop"]);
+  }
+}
+
 async function proveConcurrentMigrationRunners(port) {
   const { spawn } = await import("node:child_process");
   const created = run("createdb", ["-h", "127.0.0.1", "-p", String(port), "-U", LAB_USER, "jbm_storage_lab_race"]);
@@ -809,6 +904,7 @@ async function main() {
     );
 
     await runRestoreDrill(labDirectory, port, databaseUrl);
+    await runFailoverDrill(labDirectory, dataDirectory, port, databaseUrl);
 
     console.error("Storage lab passed. This is lab evidence only; G2 remains open.");
   } finally {
