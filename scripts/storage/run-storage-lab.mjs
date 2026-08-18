@@ -220,6 +220,77 @@ COMMIT;`;
   console.error("ok - concurrent writers cannot double-claim an envelope position");
 }
 
+async function runRestoreDrill(labDirectory, livePort, liveUrl) {
+  const statePath = join(labDirectory, "restore-drill-state.json");
+  const drillFile = "src/production/storage/postgresRestoreDrill.pgtest.ts";
+  const prepare = run(
+    "npx",
+    ["vitest", "run", "--config", "vitest.storage.config.ts", drillFile],
+    {
+      env: {
+        ...process.env,
+        JBM_STORAGE_DATABASE_URL: liveUrl,
+        JBM_RESTORE_DRILL_PHASE: "prepare",
+        JBM_RESTORE_DRILL_STATE: statePath,
+      },
+      stdio: ["ignore", "inherit", "inherit"],
+      encoding: undefined,
+    },
+  );
+  assert.equal(prepare.status, 0, "the restore drill prepare phase must pass");
+
+  const restoreDirectory = join(labDirectory, "restored-data");
+  const backup = run("pg_basebackup", [
+    "-h",
+    "127.0.0.1",
+    "-p",
+    String(livePort),
+    "-U",
+    LAB_USER,
+    "-D",
+    restoreDirectory,
+    "-X",
+    "stream",
+    "--checkpoint=fast",
+  ]);
+  assert.equal(backup.status, 0, `pg_basebackup failed: ${backup.stderr}`);
+  const restoredPort = await freeLoopbackPort();
+  const startRestored = run("pg_ctl", [
+    "-D",
+    restoreDirectory,
+    "-o",
+    `-c listen_addresses=127.0.0.1 -c port=${restoredPort} -c unix_socket_directories='' -c fsync=off`,
+    "-l",
+    join(labDirectory, "restored-postgres.log"),
+    "-w",
+    "start",
+  ]);
+  assert.equal(startRestored.status, 0, `restored pg_ctl start failed: ${startRestored.stderr}`);
+  try {
+    const restoredUrl = `postgresql://${LAB_USER}@127.0.0.1:${restoredPort}/${LAB_DATABASE}`;
+    const verify = run(
+      "npx",
+      ["vitest", "run", "--config", "vitest.storage.config.ts", drillFile],
+      {
+        env: {
+          ...process.env,
+          JBM_STORAGE_DATABASE_URL: restoredUrl,
+          JBM_RESTORE_DRILL_PHASE: "verify",
+          JBM_RESTORE_DRILL_STATE: statePath,
+        },
+        stdio: ["ignore", "inherit", "inherit"],
+        encoding: undefined,
+      },
+    );
+    assert.equal(verify.status, 0, "the restore drill verify phase must pass");
+    console.error(
+      "ok - restore drill: isolated basebackup restore verified, receipt identical, staged pending drained",
+    );
+  } finally {
+    run("pg_ctl", ["-D", restoreDirectory, "-m", "immediate", "stop"]);
+  }
+}
+
 async function proveConcurrentMigrationRunners(port) {
   const { spawn } = await import("node:child_process");
   const created = run("createdb", ["-h", "127.0.0.1", "-p", String(port), "-U", LAB_USER, "jbm_storage_lab_race"]);
@@ -574,7 +645,13 @@ async function main() {
     console.error("Running the PostgreSQL repository suite...");
     const repositorySuite = run(
       "npx",
-      ["vitest", "run", "--config", "vitest.storage.config.ts"],
+      [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.storage.config.ts",
+        "src/production/storage/postgresDeliveryStore.pgtest.ts",
+      ],
       {
         env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
         stdio: ["ignore", "inherit", "inherit"],
@@ -586,6 +663,8 @@ async function main() {
       0,
       "the PostgreSQL repository suite must pass",
     );
+
+    await runRestoreDrill(labDirectory, port, databaseUrl);
 
     console.error("Storage lab passed. This is lab evidence only; G2 remains open.");
   } finally {
