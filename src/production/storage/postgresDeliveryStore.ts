@@ -65,9 +65,11 @@ import {
   parseEd25519Signature,
   parseHash32,
   parseRfc3339Millis,
+  uint63FromBigInt,
   type ConversationId,
   type Hash32,
   type Rfc3339Millis,
+  type Uint63String,
 } from "../delivery/valueObjects";
 
 const HTTP_IDEMPOTENCY_TTL_MILLISECONDS = 7 * 24 * 60 * 60 * 1_000;
@@ -112,8 +114,9 @@ interface StoredAcceptance {
  * Production-shaped PostgreSQL adapter for the application-append lane. All
  * canonical documents are strictly re-parsed and digest-verified on every
  * read; the relational columns carry the lane, position, replay, and
- * acceptance fences that migrations 0001-0009 enforce. Attachments are not
- * supported by this adapter yet and fail closed.
+ * acceptance fences that migrations 0001-0009 enforce. Attachment references
+ * must name ready, unbound attachments owned by the sending installation in
+ * this conversation; finalize binds them to the accepted envelope.
  */
 export function createPostgresDeliveryAppendStore(
   context: PostgresDeliveryStoreContext,
@@ -285,6 +288,31 @@ export function createPostgresDeliveryAppendStore(
   const invocationIsLive = (invocation: DeliveryInvocationContext): boolean =>
     !invocation.signal.aborted && invocation.deadline > context.now();
 
+  const measureAttachments = async (
+    tx: TransactionSql,
+    command: AtomicApplicationAppendCommand,
+  ): Promise<Uint63String | null> => {
+    const identity = command.semanticIdentity;
+    let total = 0n;
+    for (const attachmentId of identity.append.attachmentIds) {
+      const rows = await tx`
+        SELECT ciphertext_bytes FROM attachments
+        WHERE attachment_id = ${attachmentId}
+          AND conversation_id = ${identity.conversationId}
+          AND owner_installation_id = ${identity.authenticatedSender.installationId}
+          AND state = 'ready'
+          AND bound_envelope_position IS NULL
+        FOR UPDATE`;
+      if (rows.length === 0) return null;
+      total += BigInt(rows[0].ciphertext_bytes);
+    }
+    try {
+      return uint63FromBigInt(total);
+    } catch {
+      return null;
+    }
+  };
+
   return Object.freeze({
     applicationAppendPreflight: {
       read: (
@@ -307,7 +335,8 @@ export function createPostgresDeliveryAppendStore(
           if (!commandTrustMatchesSnapshot(command, authority.snapshot)) {
             return rejected("conversation-state-changed");
           }
-          if (command.semanticIdentity.append.attachmentIds.length > 0) {
+          const attachmentByteLength = await measureAttachments(tx, command);
+          if (attachmentByteLength === null) {
             return rejected("attachment-invalid");
           }
           return Object.freeze({
@@ -317,7 +346,7 @@ export function createPostgresDeliveryAppendStore(
             lockedSnapshot: authority.snapshot,
             snapshotDigest: authority.snapshotDigest,
             previousHeadHash: authority.snapshot.conversation.currentLogHeadHash,
-            attachmentByteLength: "0",
+            attachmentByteLength,
             observedAt: context.now(),
           });
         }),
@@ -364,7 +393,8 @@ export function createPostgresDeliveryAppendStore(
           } catch {
             return rejected("delivery-limit-exceeded");
           }
-          if (command.semanticIdentity.append.attachmentIds.length > 0) {
+          const attachmentByteLength = await measureAttachments(tx, command);
+          if (attachmentByteLength === null) {
             return rejected("attachment-invalid");
           }
           const wireEvidence = parseMlsApplicationWireInspectionEvidence(
@@ -402,7 +432,7 @@ export function createPostgresDeliveryAppendStore(
             lockedSnapshot: authorizationSnapshot,
             authoritativeReceivedAt: context.now(),
             previousHeadHash: authority.snapshot.conversation.currentLogHeadHash,
-            attachmentByteLength: "0",
+            attachmentByteLength,
             activeSigningKeyId: authority.activeSigningKeyId,
             activeSigningKeyValidUntil: authority.activeSigningKeyValidUntil,
             reservationFence: {
@@ -578,6 +608,12 @@ export function createPostgresDeliveryAppendStore(
           ) {
             return retry();
           }
+          if (
+            (await measureAttachments(tx, pending.admissionCommand)) !==
+            pending.attachmentByteLength
+          ) {
+            return rejected("attachment-invalid");
+          }
           const quotas = convertQuotaCapacity(pending, "finalize");
           const nextSnapshot = parseLockedApplicationAppendSnapshot({
             conversation: { ...pending.commitProjection.conversation },
@@ -651,6 +687,21 @@ export function createPostgresDeliveryAppendStore(
               ${signedEnvelope.receivedAt}::timestamptz,
               ${envelopeExpiry(signedEnvelope.receivedAt)}::timestamptz
             )`;
+          const attachmentIds =
+            pending.admissionCommand.semanticIdentity.append.attachmentIds;
+          for (let ordinal = 0; ordinal < attachmentIds.length; ordinal += 1) {
+            await tx`
+              UPDATE attachments SET state = 'bound',
+                bound_envelope_position = ${signedEnvelope.position}
+              WHERE attachment_id = ${attachmentIds[ordinal]}`;
+            await tx`
+              INSERT INTO envelope_attachments (
+                conversation_id, envelope_position, ordinal, attachment_id
+              ) VALUES (
+                ${signedEnvelope.conversationId}, ${signedEnvelope.position},
+                ${ordinal}, ${attachmentIds[ordinal]}
+              )`;
+          }
           for (const installationId of pending.fanoutPlan.recipientInstallationIds) {
             const counter = await tx`
               INSERT INTO mailbox_counters (installation_id, last_position)

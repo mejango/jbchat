@@ -212,6 +212,46 @@ describeStorage("PostgreSQL application-append repository", () => {
     expect(rows.map((row) => String(row.position))).toEqual(["2", "3", "4"]);
   });
 
+  it("binds ready attachments to the accepted envelope and rejects reuse", async () => {
+    const attachmentId = "d5e83107-9bf8-4b42-a095-c3b64028e4aa";
+    const withAttachment = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "675609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e1-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "postgres application with attachment",
+        attachmentIds: [attachmentId],
+      }),
+    );
+    expect(withAttachment).toMatchObject({ status: "accepted" });
+    if (withAttachment.status !== "accepted") {
+      throw new Error("attachment append was not accepted");
+    }
+    const [attachmentRow] = await sql`
+      SELECT state, bound_envelope_position FROM attachments
+      WHERE attachment_id = ${attachmentId}`;
+    expect(attachmentRow.state).toBe("bound");
+    expect(String(attachmentRow.bound_envelope_position)).toBe(
+      withAttachment.receipt.position,
+    );
+    const [joinRow] = await sql`
+      SELECT count(*) AS links FROM envelope_attachments
+      WHERE attachment_id = ${attachmentId}`;
+    expect(String(joinRow.links)).toBe("1");
+
+    const reuse = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "685609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e2-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "postgres application reusing a bound attachment",
+        attachmentIds: [attachmentId],
+      }),
+    );
+    expect(reuse).toEqual({
+      status: "rejected",
+      reasonCode: "attachment-invalid",
+    });
+  });
+
   it("retires an expired stranded pending and reuses its fenced position", async () => {
     let strand = true;
     const strandingService = serviceWith({
@@ -253,7 +293,7 @@ describeStorage("PostgreSQL application-append repository", () => {
     );
     expect(drained).toMatchObject({
       status: "accepted",
-      receipt: { position: "5" },
+      receipt: { position: "6" },
     });
     const [tombstones] = await sql`
       SELECT count(*) AS retirements FROM application_append_retirements

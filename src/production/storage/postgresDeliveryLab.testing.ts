@@ -171,6 +171,23 @@ export async function seedPostgresDeliveryLab(
         ${snapshot.usage.envelopeBytes}, ${snapshot.usage.attachmentBytes},
         ${now}::timestamptz
       )`;
+    for (const [index, attachmentValue] of (
+      seedValue.attachments as readonly Record<string, unknown>[]
+    ).entries()) {
+      await tx`
+        INSERT INTO attachments (
+          attachment_id, conversation_id, owner_installation_id, epoch,
+          object_key, ciphertext_bytes, ciphertext_sha256, state,
+          created_at, upload_expires_at, finalized_at, expires_at
+        ) VALUES (
+          ${String(attachmentValue.attachmentId)},
+          ${conversation.conversationId}, ${snapshot.membership.installationId},
+          ${conversation.epoch}, ${`fictional-object-${index}`},
+          ${String(attachmentValue.byteLength)}, ${Buffer.alloc(32, 0x74 + index)},
+          'ready', ${now}::timestamptz, ${now}::timestamptz + interval '1 day',
+          ${now}::timestamptz, ${now}::timestamptz + interval '365 days'
+        )`;
+    }
     await tx`
       INSERT INTO delivery_conversation_authority (
         conversation_id, conversation_generation, realm_id,
