@@ -13,10 +13,23 @@ Services:
   - Predeploy: `npm run storage:migrate`
   - Env: `JBM_STORAGE_DATABASE_URL` (the project Postgres),
     `JUICEBOX_MESSAGING_EMBED_DATABASE_URL`,
-    `JUICEBOX_MESSAGING_EMBED_CONTEXT_SECRET`, plus the identity/
-    eligibility secrets as those routes ship. The witness variables are
-    NEVER set here — their absence is what keeps every witness route a
-    fail-closed 404 on this deployment.
+    `JUICEBOX_MESSAGING_EMBED_CONTEXT_SECRET`.
+  - Messaging API (/v1 device-enrollments, auth, conversations) — every
+    route stays a fail-closed 404 until ALL of these are set:
+    `JBM_IDENTITY_SECRET` (32 bytes base64url; keys every identity HMAC
+    and token hash), `JBM_DEVICE_CREDENTIAL_SIGNER_KEY_ID` +
+    `JBM_DEVICE_CREDENTIAL_SIGNING_SEED` (Ed25519 seed for
+    device-credential issuance), `JBM_ALLOWED_CHAIN_IDS`
+    (comma-separated CAIP-2, all eight launch chains). Two more lanes
+    gate independently: `JBM_DELIVERY_LOG_SIGNING_KEY_ID` +
+    `JBM_DELIVERY_LOG_SIGNING_SEED` enable the Commit route (the key ID
+    must exist in delivery_log_signing_keys), and `JBM_CURSOR_KEY_ID` +
+    `JBM_CURSOR_KEY` enable the conversation-events page route. Note:
+    wallet-proof verification stays fail-closed unavailable (503 on
+    enrollment completion) until the chain adapters ship — the routes
+    exist, but no credential can be issued in production yet.
+  - The witness variables are NEVER set here — their absence is what
+    keeps every witness route a fail-closed 404 on this deployment.
 - **postgres** — Railway PostgreSQL. Acceptance for G2 promotion: rerun
   the storage lab's restore and failover drills against this instance
   (pg_basebackup access or Railway's backup/replica features standing in,

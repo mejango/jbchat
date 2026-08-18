@@ -229,9 +229,24 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       builds the locked binary and drives it from Node; CI crypto job
       runs it. Future verbs: commit projection once server-side group
       state custody is designed.
-- [ ] Then: enrollment/eligibility/membership/append/pages HTTP routes;
-      RPC finality + purchase adapters over ratified profiles; push
-      notifications.
+- [x] HTTP surface v1: RFC 9449 DPoP verification + in-process jti cache
+      (shared store needed before multi-instance);
+      createMessagingHttpHandlers behind the witness-style fail-closed
+      env gate (JBM_IDENTITY_SECRET, credential signer seed/key,
+      JBM_ALLOWED_CHAIN_IDS; commit lane: delivery-log seed/key; pages
+      lane: cursor key). Routes: device-enrollments (allocate/
+      challenges/complete/status over the Enrollment header), auth
+      refresh/session (DPoP), membership-intents create/cancel (HTTP
+      resolves claim handles per ADR 0003), commits, events page (cc1
+      cursor over the fenced PG nonce allocator). Proposal/Commit
+      stores now write page-end projections (any newest envelope is a
+      page end). Lab suite four: full lifecycle over real Requests with
+      real SIWE/possession/DPoP crypto. Wallet verification stays 503
+      unavailable until chain adapters ship.
+- [ ] Then: RPC finality + purchase adapters (needs ENG-004 profile
+      ratification); append route (needs release-pinned verifier
+      adapters, spec-mandated unconfigured); push notifications;
+      KeyPackage publication + conversation planning routes.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,
