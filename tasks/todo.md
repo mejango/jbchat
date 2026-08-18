@@ -124,26 +124,29 @@ do not exist for Candidate A either.
       Security + human sign-off.
 
 ## Phase 6 — remaining codeable hardening
-Storage-lane follow-ups deferred from Phase 2, ordered (1)→(4)→(3)→(2) so
-each unit's prerequisites land first:
-- [ ] 6a-1 DB-authoritative timestamps: every durable timestamp the spec
-      calls authoritative (reserved_at, finalized_at, retired_at,
-      received_at incl. its ms-truncation CHECK, idempotency expiry, the
-      retirement expiry gate at ports.ts "authoritative DB now") comes from
-      the database clock via RETURNING/clock_timestamp, with the injected
-      clock kept only for invocation-deadline control-plane reads.
-- [ ] 6a-4 Scope mappings: delivery_realms + conversations.realm_id FK +
-      composite (conversation_id, realm_id) FKs on the 0009 tables +
-      quota-scope mapping rows, replacing free-text realm/scope JSON.
-- [ ] 6a-3 Policy-head/quota anchors: store reads/writes policy_heads (+
-      witness/evidence columns + mandatory-proposal completeness), send-
-      grant set membership rows behind authorized_send_grant_set_hash,
-      quota_policies + conversation_quota_bindings + reserved-capacity
-      columns and reservation rows driving real quota_counters CAS.
-- [ ] 6a-2 Relational authority graph: loadAuthority reconstructs the
-      locked snapshot from memberships/role_credentials/policy_heads/
-      send-grant/roster/recipient projection rows under a fixed lock
-      order; the custody row shrinks to a lock+version fence.
+Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
+- [x] 6a-1 (ae7c336) DB-authoritative timestamps: migration 0010's
+      delivery_db_now() feeds every durable timestamp and the retirement
+      expiry gate; the lab installs a deterministic one-row clock and
+      proves an advanced app clock alone cannot retire a live pending.
+- [x] 6a-4 (a77baec) Scope mappings: migration 0011 — delivery_realms,
+      conversations.realm/project/tenant scope columns, composite
+      (conversation_id, realm_id) FKs on every 0009 lane table,
+      quota_scopes resolving each counter hash to its realm-bound subject.
+- [x] 6a-3 (9a06e32) Policy-head/quota anchors: migration 0012 —
+      quota_counters reserved capacity + row fence driven by relational
+      CAS at reserve/finalize/retire (release-conversion defect fixed),
+      quota_policies + conversation_quota_bindings + durable reservation
+      ledger, policy-head mandatory-proposal completeness trigger (probe-
+      proven) + send-grant set member table for the issuance flow.
+- [x] 6a-2 (390304a) Relational authority graph: migration 0013 — every
+      snapshot component has authoritative rows (conversation projection,
+      memberships/role_credentials with state + revocation fence, send
+      grants, policy-head anchor, roster/recipient projections, genesis
+      join-Commit envelope anchoring the chain from position one);
+      loadAuthority cross-checks all of it fail-closed and finalize
+      advances the graph in lockstep. Residual G2 integration: delete the
+      cached JSON snapshot copy once the service consumes rows directly.
 - [x] Written Candidate-B (XMTP) evaluation (1fb5883):
       docs/xmtp-candidate-b-evaluation.md — verified ciphersuite conflict
       (XMTP pins ChaCha20-Poly1305; frozen profile mandates 0x0001

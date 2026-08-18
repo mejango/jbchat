@@ -67,9 +67,12 @@ PostgreSQL 14 or newer installed locally and is intentionally not part of
 
 Passing the storage lab is necessary but not sufficient G2 evidence. Still
 open, per the specification's own gate language: historical page-end
-projections and policy-transition range evidence, policy-head
-set/send-grant/quota anchors with deferred completeness assertions,
-authoritative realm/project/tenant/quota-scope mappings with signed
-provenance, the relational authority graph replacing the custody row, and
-replica failover. The pending-intent/fence/acceptance linkage (0009), the
-section-11.2 restore drill, and DB-authoritative time (0010) are lab-proven.
+projections and policy-transition range evidence, signed send-grant/quota
+provenance from the (unbuilt) policy-head issuance flow, deleting the
+custody row's cached JSON snapshot once the service consumes relational
+rows directly, and replica failover. Lab-proven: the pending-intent/fence/
+acceptance linkage (0009), the section-11.2 restore drill, DB-authoritative
+time (0010), realm/quota-scope mappings (0011), quota anchors with
+relational capacity CAS plus the policy-head completeness assertion (0012),
+and the relational authority graph with fail-closed cross-checks and a
+genesis join-Commit anchoring the hash chain from position one (0013).
