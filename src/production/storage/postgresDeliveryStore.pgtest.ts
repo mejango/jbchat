@@ -27,7 +27,11 @@ import {
   createPostgresDeliveryAppendStore,
   type PostgresDeliveryAppendStore,
 } from "./postgresDeliveryStore";
-import { seedPostgresDeliveryLab } from "./postgresDeliveryLab.testing";
+import {
+  installDeliveryLabClock,
+  seedPostgresDeliveryLab,
+  setDeliveryLabClock,
+} from "./postgresDeliveryLab.testing";
 
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
 const describeStorage = DATABASE_URL ? describe : describe.skip;
@@ -99,6 +103,7 @@ describeStorage("PostgreSQL application-append repository", () => {
   beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { max: 8, onnotice: () => {} });
     store = createPostgresDeliveryAppendStore({ sql, now: () => now });
+    await installDeliveryLabClock(sql, LAB_NOW);
     await seedPostgresDeliveryLab(sql, seed, fictionalDeliveryLimits());
   });
 
@@ -284,6 +289,7 @@ describeStorage("PostgreSQL application-append repository", () => {
     expect(String(pendingCount.pendings)).toBe("1");
 
     now = parseRfc3339Millis("2026-08-14T16:22:00.000Z");
+    await setDeliveryLabClock(sql, now);
     const drained = await serviceWith().appendApplicationEnvelope(
       fictionalAppendRequest({
         envelopeId: "645609f1-9662-49f6-9cda-9ef319abe51d",
@@ -303,5 +309,81 @@ describeStorage("PostgreSQL application-append repository", () => {
       SELECT count(*) AS pendings FROM application_append_pendings
       WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
     expect(String(pendingAfter.pendings)).toBe("0");
+  });
+
+  it("gates retirement on database-authoritative time, not the application clock", async () => {
+    let strand = true;
+    const strandingService = serviceWith({
+      checkpointSigner: {
+        signExact: async (request) => {
+          if (strand) {
+            strand = false;
+            return { status: "unavailable", reasonCode: "dependency-unavailable" };
+          }
+          return buildPorts().checkpointSigner.signExact(request);
+        },
+        resolveOrCancelIfUnsigned: (request) =>
+          buildPorts().checkpointSigner.resolveOrCancelIfUnsigned(request),
+      },
+    });
+    const stranded = await strandingService.appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "695609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e3-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "clock-gate stranded application",
+      }),
+    );
+    expect(stranded).toEqual({
+      status: "unavailable",
+      reasonCode: "dependency-unavailable",
+    });
+    const [retirementsBefore] = await sql`
+      SELECT count(*) AS retirements FROM application_append_retirements
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+
+    // Only the application clock advances past the pending's expiry; the
+    // database-authoritative clock still reads the earlier instant, so the
+    // store must refuse to retire the live fenced pending.
+    now = parseRfc3339Millis("2026-08-14T16:23:00.000Z");
+    const skewedAttempt = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "6a5609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e4-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "skewed-clock retirement attempt",
+      }),
+    );
+    expect(skewedAttempt.status).toBe("unavailable");
+    const [pendingHeld] = await sql`
+      SELECT count(*) AS pendings FROM application_append_pendings
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(String(pendingHeld.pendings)).toBe("1");
+    const [retirementsHeld] = await sql`
+      SELECT count(*) AS retirements FROM application_append_retirements
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(String(retirementsHeld.retirements)).toBe(
+      String(retirementsBefore.retirements),
+    );
+
+    // Advancing the database clock is what makes the same retirement legal.
+    await setDeliveryLabClock(sql, now);
+    const drained = await serviceWith().appendApplicationEnvelope(
+      fictionalAppendRequest({
+        envelopeId: "6a5609f1-9662-49f6-9cda-9ef319abe51d",
+        idempotencyKey: "0198a5e4-4c58-7e31-bbf1-0fd4c09e4acf",
+        ciphertextText: "skewed-clock retirement attempt",
+      }),
+    );
+    expect(drained).toMatchObject({ status: "accepted" });
+    const [pendingDrained] = await sql`
+      SELECT count(*) AS pendings FROM application_append_pendings
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(String(pendingDrained.pendings)).toBe("0");
+    const [finalized] = await sql`
+      SELECT finalized_at FROM application_append_acceptances
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}
+        AND envelope_id = '6a5609f1-9662-49f6-9cda-9ef319abe51d'`;
+    expect(new Date(finalized.finalized_at as Date).toISOString()).toBe(
+      "2026-08-14T16:23:00.000Z",
+    );
   });
 });

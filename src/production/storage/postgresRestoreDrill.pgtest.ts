@@ -28,6 +28,7 @@ import {
   parseSigningKeyId,
   type Rfc3339Millis,
 } from "../delivery/valueObjects";
+import { installDeliveryLabClock } from "./postgresDeliveryLab.testing";
 import {
   createPostgresDeliveryAppendStore,
   type PostgresDeliveryAppendStore,
@@ -103,9 +104,10 @@ describeDrill(`restore drill (${PHASE} phase)`, () => {
     };
   };
 
-  beforeAll(() => {
+  beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { max: 4, onnotice: () => {} });
     store = createPostgresDeliveryAppendStore({ sql, now: () => now });
+    await installDeliveryLabClock(sql, now);
   });
 
   afterAll(async () => {
@@ -186,7 +188,7 @@ describeDrill(`restore drill (${PHASE} phase)`, () => {
       env: { ...process.env, JBM_STORAGE_DATABASE_URL: DATABASE_URL },
     });
     expect(settle.status).toBe(0);
-    expect(settle.stderr).toMatch(/9 migrations, 0 newly applied/);
+    expect(settle.stderr).toMatch(/10 migrations, 0 newly applied/);
   });
 
   it("recomputes the envelope hash chain from restored relational rows alone", async () => {

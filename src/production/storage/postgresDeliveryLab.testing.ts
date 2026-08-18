@@ -30,6 +30,38 @@ const KIND_MAP = {
  * counters, and the authority custody row) so the PostgreSQL append store
  * can run the production delivery service against real schema constraints.
  */
+/**
+ * Replaces delivery_db_now() with a deterministic lab clock backed by one
+ * row, so controlled-time scenarios advance database-authoritative time
+ * explicitly instead of via any application clock. Production keeps the
+ * migration-pinned clock_timestamp definition.
+ */
+export async function installDeliveryLabClock(
+  sql: Sql,
+  now: string,
+): Promise<void> {
+  await sql`
+    CREATE TABLE IF NOT EXISTS delivery_lab_clock (
+      only_row boolean PRIMARY KEY DEFAULT true CHECK (only_row),
+      now timestamptz NOT NULL
+    )`;
+  await sql`
+    INSERT INTO delivery_lab_clock (now)
+    VALUES (${parseRfc3339Millis(now)}::timestamptz)
+    ON CONFLICT (only_row) DO UPDATE SET now = excluded.now`;
+  await sql.unsafe(
+    "CREATE OR REPLACE FUNCTION delivery_db_now() RETURNS timestamptz " +
+      "LANGUAGE sql VOLATILE AS $$ " +
+      "SELECT date_trunc('milliseconds', (SELECT now FROM delivery_lab_clock)) $$",
+  );
+}
+
+/** Advances only the database-authoritative lab clock. */
+export async function setDeliveryLabClock(sql: Sql, now: string): Promise<void> {
+  await sql`
+    UPDATE delivery_lab_clock SET now = ${parseRfc3339Millis(now)}::timestamptz`;
+}
+
 export async function seedPostgresDeliveryLab(
   sql: Sql,
   seedValue: InMemoryDeliveryLabSeed,

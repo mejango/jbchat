@@ -123,6 +123,11 @@ export function createPostgresDeliveryAppendStore(
 ): PostgresDeliveryAppendStore {
   const { sql } = context;
 
+  const dbNow = async (tx: TransactionSql): Promise<Rfc3339Millis> => {
+    const rows = await tx`SELECT delivery_db_now() AS db_now`;
+    return iso(rows[0].db_now as Date);
+  };
+
   const loadAuthority = async (
     tx: TransactionSql,
     conversationId: ConversationId,
@@ -197,6 +202,7 @@ export function createPostgresDeliveryAppendStore(
   const lookupAcceptedReplay = async (
     tx: TransactionSql,
     command: AtomicApplicationAppendCommand,
+    observedAt: Rfc3339Millis,
   ): Promise<unknown | null> => {
     const scopeHash = httpScopeHash(command);
     const httpRows = await tx`
@@ -206,7 +212,7 @@ export function createPostgresDeliveryAppendStore(
         ON a.realm_id = h.realm_id AND a.conversation_id = h.conversation_id
           AND a.envelope_id = h.envelope_id
       WHERE h.http_scope_hash = ${scopeHash}
-        AND h.expires_at > ${context.now()}::timestamptz`;
+        AND h.expires_at > delivery_db_now()`;
     if (httpRows.length > 0) {
       const classification = classifyHttpIdempotencyCommitment(
         parseHash32(b64(httpRows[0].request_commitment)),
@@ -218,7 +224,7 @@ export function createPostgresDeliveryAppendStore(
             command,
             canonicalJson(httpRows[0].acceptance_canonical) as StoredAcceptance,
             "http",
-            context.now(),
+            observedAt,
           );
     }
     const identity = command.semanticIdentity;
@@ -233,7 +239,7 @@ export function createPostgresDeliveryAppendStore(
       acceptance.acceptedIntent.admissionCommand.semanticIdentity,
       identity,
     )
-      ? acceptedResultFor(command, acceptance, "envelope", context.now())
+      ? acceptedResultFor(command, acceptance, "envelope", observedAt)
       : conflict();
   };
 
@@ -241,6 +247,7 @@ export function createPostgresDeliveryAppendStore(
     tx: TransactionSql,
     command: AtomicApplicationAppendCommand,
     lock: boolean,
+    observedAt: Rfc3339Millis,
   ): Promise<unknown | null> => {
     const located = await loadPending(
       tx,
@@ -259,7 +266,7 @@ export function createPostgresDeliveryAppendStore(
       );
       return classification.kind === "conflict"
         ? conflict()
-        : pendingResultFor(command, pending, "http", reservedAt, context.now());
+        : pendingResultFor(command, pending, "http", reservedAt, observedAt);
     }
     if (
       admitted.realmId === command.realmId &&
@@ -272,7 +279,7 @@ export function createPostgresDeliveryAppendStore(
         admitted.semanticIdentity,
         command.semanticIdentity,
       )
-        ? pendingResultFor(command, pending, "envelope", reservedAt, context.now())
+        ? pendingResultFor(command, pending, "envelope", reservedAt, observedAt)
         : conflict();
     }
     if (
@@ -280,7 +287,7 @@ export function createPostgresDeliveryAppendStore(
       admitted.semanticIdentity.conversationId ===
         command.semanticIdentity.conversationId
     ) {
-      return blockedByPendingResultFor(command, pending, reservedAt, context.now());
+      return blockedByPendingResultFor(command, pending, reservedAt, observedAt);
     }
     return null;
   };
@@ -322,9 +329,15 @@ export function createPostgresDeliveryAppendStore(
         sql.begin(async (tx) => {
           if (!invocationIsLive(invocation)) return unavailable("timeout");
           const command = parseAtomicApplicationAppendCommand(commandValue);
-          const accepted = await lookupAcceptedReplay(tx, command);
+          const observedAt = await dbNow(tx);
+          const accepted = await lookupAcceptedReplay(tx, command, observedAt);
           if (accepted !== null) return accepted;
-          const pendingReplay = await lookupPendingReplay(tx, command, false);
+          const pendingReplay = await lookupPendingReplay(
+            tx,
+            command,
+            false,
+            observedAt,
+          );
           if (pendingReplay !== null) return pendingReplay;
           const authority = await loadAuthority(
             tx,
@@ -347,7 +360,7 @@ export function createPostgresDeliveryAppendStore(
             snapshotDigest: authority.snapshotDigest,
             previousHeadHash: authority.snapshot.conversation.currentLogHeadHash,
             attachmentByteLength,
-            observedAt: context.now(),
+            observedAt,
           });
         }),
     },
@@ -371,9 +384,15 @@ export function createPostgresDeliveryAppendStore(
             command.semanticIdentity.conversationId,
             true,
           );
-          const accepted = await lookupAcceptedReplay(tx, command);
+          const observedAt = await dbNow(tx);
+          const accepted = await lookupAcceptedReplay(tx, command, observedAt);
           if (accepted !== null) return accepted;
-          const pendingReplay = await lookupPendingReplay(tx, command, true);
+          const pendingReplay = await lookupPendingReplay(
+            tx,
+            command,
+            true,
+            observedAt,
+          );
           if (pendingReplay !== null) return pendingReplay;
           if (!authority) return rejected("conversation-not-found");
           if (!commandTrustMatchesSnapshot(command, authority.snapshot)) {
@@ -430,7 +449,7 @@ export function createPostgresDeliveryAppendStore(
           });
           const preparedValue = prepareUnsigned({
             lockedSnapshot: authorizationSnapshot,
-            authoritativeReceivedAt: context.now(),
+            authoritativeReceivedAt: observedAt,
             previousHeadHash: authority.snapshot.conversation.currentLogHeadHash,
             attachmentByteLength,
             activeSigningKeyId: authority.activeSigningKeyId,
@@ -487,15 +506,9 @@ export function createPostgresDeliveryAppendStore(
               ${pending.reservationFence.generation},
               ${bytea(fenceTokenHashOf(pending.reservationFence))},
               ${JSON.stringify(pending)}::jsonb,
-              ${context.now()}::timestamptz, ${pending.pendingExpiresAt}::timestamptz
+              ${observedAt}::timestamptz, ${pending.pendingExpiresAt}::timestamptz
             )`;
-          return pendingResultFor(
-            command,
-            pending,
-            "none",
-            context.now(),
-            context.now(),
-          );
+          return pendingResultFor(command, pending, "none", observedAt, observedAt);
         }),
       finalizeApplicationAppendAtomically: (
         inputValue: FinalizeApplicationAppendInput,
@@ -512,7 +525,8 @@ export function createPostgresDeliveryAppendStore(
             pending.envelope.conversationId,
             true,
           );
-          const accepted = await lookupAcceptedReplay(tx, command);
+          const observedAt = await dbNow(tx);
+          const accepted = await lookupAcceptedReplay(tx, command, observedAt);
           if (accepted !== null) return accepted;
           const located = await loadPending(
             tx,
@@ -536,7 +550,7 @@ export function createPostgresDeliveryAppendStore(
                 command,
                 finalizedAcceptance,
                 replayClassification(command, pending),
-                context.now(),
+                observedAt,
               );
             }
             return retry();
@@ -645,7 +659,7 @@ export function createPostgresDeliveryAppendStore(
             signatureEvidence,
             signerFenceEvidence: fenceEvidence,
             fanoutEvidence,
-            finalizedAt: context.now(),
+            finalizedAt: observedAt,
           });
 
           await tx`
@@ -653,13 +667,13 @@ export function createPostgresDeliveryAppendStore(
               snapshot_canonical = ${JSON.stringify(nextSnapshot)}::jsonb,
               snapshot_digest = ${bytea(nextSnapshotDigest)},
               row_version = row_version + 1,
-              updated_at = ${context.now()}::timestamptz
+              updated_at = ${observedAt}::timestamptz
             WHERE conversation_id = ${signedEnvelope.conversationId}`;
           await tx`
             UPDATE conversations SET
               last_position = ${signedEnvelope.position},
               current_log_head_hash = ${bytea(signedEnvelope.headHash)},
-              last_activity_at = ${context.now()}::timestamptz
+              last_activity_at = ${observedAt}::timestamptz
             WHERE conversation_id = ${signedEnvelope.conversationId}`;
           await tx`
             INSERT INTO envelopes (
@@ -718,7 +732,7 @@ export function createPostgresDeliveryAppendStore(
                 ${installationId}, ${String(counter[0].last_position)},
                 ${signedEnvelope.conversationId}, ${signedEnvelope.position},
                 ${signedEnvelope.envelopeId}, 'application',
-                ${context.now()}::timestamptz,
+                ${observedAt}::timestamptz,
                 ${envelopeExpiry(signedEnvelope.receivedAt)}::timestamptz
               )`;
           }
@@ -727,7 +741,7 @@ export function createPostgresDeliveryAppendStore(
               envelope_count = ${nextSnapshot.usage.envelopeCount},
               envelope_bytes = ${nextSnapshot.usage.envelopeBytes},
               attachment_bytes = ${nextSnapshot.usage.attachmentBytes},
-              updated_at = ${context.now()}::timestamptz
+              updated_at = ${observedAt}::timestamptz
             WHERE conversation_id = ${signedEnvelope.conversationId}`;
           await tx`
             INSERT INTO outbox_events (
@@ -742,7 +756,7 @@ export function createPostgresDeliveryAppendStore(
                 envelopeId: signedEnvelope.envelopeId,
                 position: signedEnvelope.position,
               })}::jsonb,
-              ${context.now()}::timestamptz, ${context.now()}::timestamptz
+              ${observedAt}::timestamptz, ${observedAt}::timestamptz
             )`;
           await tx`
             INSERT INTO application_append_acceptances (
@@ -756,7 +770,7 @@ export function createPostgresDeliveryAppendStore(
               ${bytea(pending.admissionCommandDigest)},
               ${bytea(pending.semanticIdentityDigest)},
               ${JSON.stringify(acceptance)}::jsonb,
-              ${context.now()}::timestamptz
+              ${observedAt}::timestamptz
             )`;
           const semanticallyEqual = applicationEnvelopeSemanticallyEqual(
             pending.admissionCommand.semanticIdentity,
@@ -776,7 +790,7 @@ export function createPostgresDeliveryAppendStore(
                 ${pending.admissionCommand.realmId},
                 ${signedEnvelope.conversationId}, ${signedEnvelope.envelopeId},
                 ${new Date(
-                  Date.parse(context.now()) + HTTP_IDEMPOTENCY_TTL_MILLISECONDS,
+                  Date.parse(observedAt) + HTTP_IDEMPOTENCY_TTL_MILLISECONDS,
                 ).toISOString()}::timestamptz
               ) ON CONFLICT (http_scope_hash) DO NOTHING`;
           }
@@ -787,7 +801,7 @@ export function createPostgresDeliveryAppendStore(
             command,
             acceptance,
             replayClassification(command, pending),
-            context.now(),
+            observedAt,
           );
         }),
       retireExpiredApplicationAppendAtomically: (
@@ -798,6 +812,7 @@ export function createPostgresDeliveryAppendStore(
           if (!invocationIsLive(invocation)) return unavailable("timeout");
           const command = parseAtomicApplicationAppendCommand(inputValue.command);
           const pendingIntentDigest = parseHash32(inputValue.pendingIntentDigest);
+          const observedAt = await dbNow(tx);
           const tombstones = await tx`
             SELECT retired_at FROM application_append_retirements
             WHERE intent_digest = ${bytea(pendingIntentDigest)}`;
@@ -806,7 +821,7 @@ export function createPostgresDeliveryAppendStore(
               command,
               pendingIntentDigest,
               iso(tombstones[0].retired_at),
-              context.now(),
+              observedAt,
             );
           }
           const pending = parsePendingApplicationAppendIntent(
@@ -823,7 +838,7 @@ export function createPostgresDeliveryAppendStore(
                   command,
                   located.pending,
                   located.reservedAt,
-                  context.now(),
+                  observedAt,
                 )
               : unavailable("malformed-dependency-response");
           }
@@ -836,7 +851,7 @@ export function createPostgresDeliveryAppendStore(
             inputFence.token !== pending.reservationFence.token ||
             parseRfc3339Millis(inputValue.pendingExpiresAt) !==
               pending.pendingExpiresAt ||
-            context.now() < pending.pendingExpiresAt
+            observedAt < pending.pendingExpiresAt
           ) {
             return unavailable("malformed-dependency-response");
           }
@@ -876,14 +891,9 @@ export function createPostgresDeliveryAppendStore(
               ${pending.envelope.conversationId},
               ${pending.reservationFence.generation},
               ${bytea(fenceTokenHashOf(pending.reservationFence))},
-              ${context.now()}::timestamptz
+              ${observedAt}::timestamptz
             )`;
-          return retiredResultFor(
-            command,
-            pendingIntentDigest,
-            context.now(),
-            context.now(),
-          );
+          return retiredResultFor(command, pendingIntentDigest, observedAt, observedAt);
         }),
     },
     loadSnapshot: async (

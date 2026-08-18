@@ -42,10 +42,15 @@ finalize commits the envelope, mailbox fanout, usage, outbox event,
 acceptance, and idempotency rows in one transaction. The storage lab runs the
 real delivery service against it (`src/production/storage/*.pgtest.ts`),
 covering accept, HTTP/envelope replay across process boundaries, idempotency
-conflict, concurrent distinct appends, and expired-pending retirement with
-fenced position reuse. Attachments are not supported by this adapter yet and
-fail closed; the authority custody row is an explicit interim stand-in for
-the full relational authority graph.
+conflict, concurrent distinct appends, attachment measure/bind with reuse
+rejection, and expired-pending retirement with fenced position reuse. Durable
+timestamps (reserved_at, finalized_at, retired_at, the signed received_at,
+idempotency expiry) and the pending-expiry retirement gate come from the
+database clock `delivery_db_now()` (migration 0010); the injected clock
+remains only for invocation-deadline control-plane reads, and the lab proves
+an advanced application clock alone cannot retire a live fenced pending. The
+authority custody row is an explicit interim stand-in for the full
+relational authority graph.
 
 `npm run storage:migrate` applies pending migrations to the exact database in
 `JBM_STORAGE_DATABASE_URL`; it never infers a target, refuses checksum drift,
@@ -61,10 +66,10 @@ PostgreSQL 14 or newer installed locally and is intentionally not part of
 ## Boundary
 
 Passing the storage lab is necessary but not sufficient G2 evidence. Still
-open, per the specification's own gate language: the pending-intent/signing-
-fence tables and replay/acceptance linkage (their shape belongs to the
-production repository that implements `AtomicDeliveryPersistencePort`),
-historical page-end projections and policy-transition range evidence,
-policy-head set/send-grant/quota anchors with deferred completeness
-assertions, authoritative realm/project/tenant/quota-scope mappings with
-signed provenance, the section-11.2 restore drill, and replica failover.
+open, per the specification's own gate language: historical page-end
+projections and policy-transition range evidence, policy-head
+set/send-grant/quota anchors with deferred completeness assertions,
+authoritative realm/project/tenant/quota-scope mappings with signed
+provenance, the relational authority graph replacing the custody row, and
+replica failover. The pending-intent/fence/acceptance linkage (0009), the
+section-11.2 restore drill, and DB-authoritative time (0010) are lab-proven.

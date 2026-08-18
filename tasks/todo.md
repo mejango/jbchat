@@ -124,9 +124,26 @@ do not exist for Candidate A either.
       Security + human sign-off.
 
 ## Phase 6 — remaining codeable hardening
-- [ ] Storage-lane follow-ups deferred from Phase 2: DB-authoritative
-      timestamps, full relational authority graph replacing the custody
-      row, policy-head/quota anchors, scope mappings
+Storage-lane follow-ups deferred from Phase 2, ordered (1)→(4)→(3)→(2) so
+each unit's prerequisites land first:
+- [ ] 6a-1 DB-authoritative timestamps: every durable timestamp the spec
+      calls authoritative (reserved_at, finalized_at, retired_at,
+      received_at incl. its ms-truncation CHECK, idempotency expiry, the
+      retirement expiry gate at ports.ts "authoritative DB now") comes from
+      the database clock via RETURNING/clock_timestamp, with the injected
+      clock kept only for invocation-deadline control-plane reads.
+- [ ] 6a-4 Scope mappings: delivery_realms + conversations.realm_id FK +
+      composite (conversation_id, realm_id) FKs on the 0009 tables +
+      quota-scope mapping rows, replacing free-text realm/scope JSON.
+- [ ] 6a-3 Policy-head/quota anchors: store reads/writes policy_heads (+
+      witness/evidence columns + mandatory-proposal completeness), send-
+      grant set membership rows behind authorized_send_grant_set_hash,
+      quota_policies + conversation_quota_bindings + reserved-capacity
+      columns and reservation rows driving real quota_counters CAS.
+- [ ] 6a-2 Relational authority graph: loadAuthority reconstructs the
+      locked snapshot from memberships/role_credentials/policy_heads/
+      send-grant/roster/recipient projection rows under a fixed lock
+      order; the custody row shrinks to a lock+version fence.
 - [x] Written Candidate-B (XMTP) evaluation (1fb5883):
       docs/xmtp-candidate-b-evaluation.md — verified ciphersuite conflict
       (XMTP pins ChaCha20-Poly1305; frozen profile mandates 0x0001
