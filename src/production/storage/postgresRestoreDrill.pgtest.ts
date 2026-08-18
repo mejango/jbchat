@@ -193,8 +193,11 @@ describeDrill(`restore drill (${PHASE} phase)`, () => {
 
   it("recomputes the envelope hash chain from restored relational rows alone", async () => {
     const rows = await sql`
-      SELECT position, envelope_id, envelope_class, sender_account_id,
-             sender_installation_id, epoch, roster_version, content_type,
+      SELECT position, envelope_id, envelope_class, sender_type,
+             sender_account_id, sender_installation_id,
+             sender_external_credential_id,
+             encode(sender_external_fingerprint, 'base64') AS sender_external_fingerprint,
+             sender_signer_generation, epoch, roster_version, content_type,
              encode(envelope_sha256, 'base64') AS envelope_sha256,
              encode(previous_head_hash, 'base64') AS previous_head_hash,
              encode(leaf_hash, 'base64') AS leaf_hash,
@@ -216,11 +219,21 @@ describeDrill(`restore drill (${PHASE} phase)`, () => {
         position: String(row.position),
         envelopeId: String(row.envelope_id),
         envelopeClass: String(row.envelope_class),
-        sender: {
-          type: "installation",
-          accountId: String(row.sender_account_id),
-          installationId: String(row.sender_installation_id),
-        },
+        sender:
+          String(row.sender_type) === "installation"
+            ? {
+                type: "installation",
+                accountId: String(row.sender_account_id),
+                installationId: String(row.sender_installation_id),
+              }
+            : {
+                type: "entitlement_signer",
+                credentialId: String(row.sender_external_credential_id),
+                fingerprint: fromPgBase64(
+                  String(row.sender_external_fingerprint),
+                ),
+                signerGeneration: String(row.sender_signer_generation),
+              },
         epoch: String(row.epoch),
         rosterVersion: String(row.roster_version),
         contentType: String(row.content_type),

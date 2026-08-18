@@ -37,6 +37,8 @@ export const ENVELOPE_LEAF_HASH_DOMAIN = "jb-msg-envelope-leaf/v1" as const;
 export const LOG_HEAD_HASH_DOMAIN = "jb-msg-log-head/v1" as const;
 export const DELIVERY_LOG_CHECKPOINT_DIGEST_DOMAIN =
   "jb-msg-delivery-log-checkpoint/v1" as const;
+export const EXTERNAL_PROPOSAL_HASH_DOMAIN =
+  "jb-msg-external-proposal/v1" as const;
 
 const U32_MAX = 0xffff_ffffn;
 
@@ -157,6 +159,25 @@ export function computeEnvelopeLeafHash(input: EnvelopeLeafInput): Hash32 {
       utf8(parsed.contentType),
       decodeHash32(parsed.envelopeSha256, "envelopeSha256"),
       utf8(parsed.receivedAt),
+    ),
+  );
+}
+
+/**
+ * SHA-256(domain || u32be-LP(publicMessage) || authorizationRecordHash raw32).
+ * The exact grammar sync's verifier recomputes; the write path and the
+ * verifier must never drift apart.
+ */
+export function computeExternalProposalHash(
+  publicMessage: Uint8Array,
+  authorizationRecordHash: Hash32,
+): Hash32 {
+  return sha256Bytes(
+    utf8(EXTERNAL_PROPOSAL_HASH_DOMAIN),
+    lengthPrefix(copyBytes(publicMessage, "publicMessage")),
+    decodeHash32(
+      parseHash32(authorizationRecordHash, "authorizationRecordHash"),
+      "authorizationRecordHash",
     ),
   );
 }

@@ -11,8 +11,10 @@ import {
   computeEnvelopeSha256,
   computeLogHeadHash,
   canonicalLengthPrefixed,
-  lengthPrefix,
   sha256Bytes,
+
+  EXTERNAL_PROPOSAL_HASH_DOMAIN,
+  computeExternalProposalHash,
 } from "./hashes";
 import {
   parseDeliveryLimits,
@@ -130,8 +132,7 @@ export const MLS_COMMIT_PROJECTION_EVIDENCE_DIGEST_DOMAIN =
   "jb-msg-mls-commit-projection-evidence/v1" as const;
 export const MLS_EXTERNAL_PROPOSAL_EVIDENCE_DIGEST_DOMAIN =
   "jb-msg-mls-external-proposal-evidence/v1" as const;
-export const MLS_EXTERNAL_PROPOSAL_HASH_DOMAIN =
-  "jb-msg-external-proposal/v1" as const;
+export const MLS_EXTERNAL_PROPOSAL_HASH_DOMAIN = EXTERNAL_PROPOSAL_HASH_DOMAIN;
 export const POLICY_MANDATORY_PROPOSAL_SET_HASH_DOMAIN =
   "jb-msg-policy-mandatory-proposal-set/v1" as const;
 export const CONVERSATION_POLICY_REPLAY_EVIDENCE_DIGEST_DOMAIN =
@@ -3509,10 +3510,9 @@ export function parseMlsExternalProposalEvidence(
   ) {
     throw invalid("External proposal credential was not active at receipt.");
   }
-  const computedProposalHash = sha256Bytes(
-    utf8(MLS_EXTERNAL_PROPOSAL_HASH_DOMAIN),
-    lengthPrefix(decodeCanonicalBase64Url(expected.envelopeBytes)),
-    decodeHash32(parsed.authorizationRecordHash),
+  const computedProposalHash = computeExternalProposalHash(
+    decodeCanonicalBase64Url(expected.envelopeBytes),
+    parsed.authorizationRecordHash,
   );
   if (parsed.proposalHash !== computedProposalHash) {
     throw invalid("External proposal hash is not bound to the exact PublicMessage.");

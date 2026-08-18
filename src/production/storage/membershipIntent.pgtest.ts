@@ -20,10 +20,20 @@ import {
 } from "./membershipIntentStore";
 import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
 import { setDeliveryLabClock } from "./postgresDeliveryLab.testing";
+import { createExternalProposalStore } from "./externalProposalStore";
+import { signFictionalDeliveryCheckpointDigestForTesting } from "../delivery/fictionalCryptoPorts.testing";
+import {
+  computeExternalProposalHash,
+  computeLogHeadHash,
+} from "../delivery/hashes";
+import type { Hash32 } from "../delivery/valueObjects";
 
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
 const describeStorage = DATABASE_URL ? describe : describe.skip;
 const NOW = "2026-08-14T16:21:30.000Z";
+const POLICY_ID = "00000000-0000-4000-8000-0000000a0001";
+const CHECKPOINT_ID = "00000000-0000-4000-8000-0000000a0003";
+const EXTERNAL_SENDER_ID = "00000000-0000-4000-8000-0000000a0004";
 const P256_ORDER =
   0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
 
@@ -33,8 +43,12 @@ describeStorage("membership intents", () => {
   let targetInstallationId: string;
   let targetAccountId: string;
   let grantId: string;
+  let projectRefId: string;
 
-  const enrollTargetDevice = async (): Promise<void> => {
+  const enrollDevice = async (): Promise<{
+    installationId: string;
+    accountId: string;
+  }> => {
     const identityCrypto = createKeyedIdentityCrypto(Buffer.alloc(32, 0x5e));
     const enrollment = createEnrollmentStore({
       sql,
@@ -135,30 +149,19 @@ describeStorage("membership intents", () => {
       },
     );
     if (completion.status !== "issued") throw new Error("enrollment refused");
-    targetInstallationId = completion.installationId;
-    targetAccountId = completion.accountId;
     void signNode;
+    return {
+      installationId: completion.installationId,
+      accountId: completion.accountId,
+    };
   };
 
-  beforeAll(async () => {
-    sql = postgres(DATABASE_URL!, { max: 6, onnotice: () => {} });
-    await setDeliveryLabClock(sql, NOW);
-    store = createMembershipIntentStore({ sql });
-    await enrollTargetDevice();
-
-    const [conversation] = await sql`
-      SELECT project_ref_id FROM conversations
-      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
-    const policyId = "00000000-0000-4000-8000-0000000a0001";
-    await sql`
-      INSERT INTO policies (
-        policy_id, policy_revision, project_ref_id, canonical_document,
-        policy_hash, created_at
-      ) VALUES (
-        ${policyId}, 1, ${String(conversation.project_ref_id)},
-        ${"{}"}::jsonb, ${Buffer.alloc(32, 0xa1)}, ${NOW}::timestamptz
-      )`;
-    grantId = "00000000-0000-4000-8000-0000000a0002";
+  const seedGrant = async (
+    grantIdValue: string,
+    accountId: string,
+    installationId: string,
+    projectRefId: string,
+  ): Promise<void> => {
     await sql`
       INSERT INTO eligibility_grants (
         grant_id, project_ref_id, account_id, installation_id, capability,
@@ -167,13 +170,56 @@ describeStorage("membership intents", () => {
         finality_evidence_digest, source_chain_id, source_block,
         source_block_hash, finality_status, state, issued_at, valid_until
       ) VALUES (
-        ${grantId}, ${String(conversation.project_ref_id)},
-        ${targetAccountId}, ${targetInstallationId}, 'purchase-support',
-        ${policyId}, 1, ${Buffer.alloc(32, 0xa1)}, ${Buffer.alloc(32, 0xa2)},
-        '00000000-0000-4000-8000-0000000000f1', 1, ${Buffer.alloc(32, 0xf1)},
-        ${Buffer.alloc(32, 0xa3)}, 'eip155:99999', 1, ${Buffer.alloc(32, 0xa4)},
-        'verified-finalized', 'active', ${NOW}::timestamptz,
-        ${NOW}::timestamptz + interval '5 minutes'
+        ${grantIdValue}, ${projectRefId}, ${accountId}, ${installationId},
+        'purchase-support', ${POLICY_ID}, 1, ${Buffer.alloc(32, 0xa1)},
+        ${Buffer.alloc(32, 0xa2)}, '00000000-0000-4000-8000-0000000000f1', 1,
+        ${Buffer.alloc(32, 0xf1)}, ${Buffer.alloc(32, 0xa3)}, 'eip155:99999',
+        1, ${Buffer.alloc(32, 0xa4)}, 'verified-finalized', 'active',
+        ${NOW}::timestamptz, ${NOW}::timestamptz + interval '5 minutes'
+      )`;
+  };
+
+  beforeAll(async () => {
+    sql = postgres(DATABASE_URL!, { max: 6, onnotice: () => {} });
+    await setDeliveryLabClock(sql, NOW);
+    store = createMembershipIntentStore({ sql });
+    const target = await enrollDevice();
+    targetInstallationId = target.installationId;
+    targetAccountId = target.accountId;
+
+    const [conversation] = await sql`
+      SELECT project_ref_id FROM conversations
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    projectRefId = String(conversation.project_ref_id);
+    await sql`
+      INSERT INTO policies (
+        policy_id, policy_revision, project_ref_id, canonical_document,
+        policy_hash, created_at
+      ) VALUES (
+        ${POLICY_ID}, 1, ${projectRefId},
+        ${"{}"}::jsonb, ${Buffer.alloc(32, 0xa1)}, ${NOW}::timestamptz
+      )`;
+    grantId = "00000000-0000-4000-8000-0000000a0002";
+    await seedGrant(grantId, targetAccountId, targetInstallationId, projectRefId);
+    await sql`
+      INSERT INTO policy_log_checkpoints (
+        checkpoint_id, tree_size, root_hash, signer_key_id, signature,
+        witness_key_id, witness_signature, created_at
+      ) VALUES (
+        ${CHECKPOINT_ID}, 1, ${Buffer.alloc(32, 0xa5)}, 'lab-policy-signer',
+        ${Buffer.from("aa", "hex")}, 'lab-witness', ${Buffer.from("bb", "hex")},
+        ${NOW}::timestamptz
+      )`;
+    await sql`
+      INSERT INTO external_sender_credentials (
+        external_sender_credential_id, project_ref_id, signer_generation,
+        credential_public, credential_fingerprint, not_before, expires_at,
+        created_checkpoint_id, witnessed_at, lifecycle_state
+      ) VALUES (
+        ${EXTERNAL_SENDER_ID}, ${projectRefId}, 1, ${Buffer.from("cc", "hex")},
+        ${Buffer.alloc(32, 0xa6)}, ${NOW}::timestamptz - interval '1 day',
+        ${NOW}::timestamptz + interval '30 days', ${CHECKPOINT_ID},
+        ${NOW}::timestamptz, 'published'
       )`;
   });
 
@@ -341,5 +387,114 @@ describeStorage("membership intents", () => {
       status: "refused",
       reasonCode: "target-not-a-member",
     });
+  });
+
+  it("records an external proposal that extends the envelope log", async () => {
+    const second = await enrollDevice();
+    const secondGrantId = "00000000-0000-4000-8000-0000000a0005";
+    await seedGrant(
+      secondGrantId,
+      second.accountId,
+      second.installationId,
+      projectRefId,
+    );
+    const created = await store.createIntent(
+      addInput({
+        targetInstallationId: second.installationId,
+        grantId: secondGrantId,
+      }),
+    );
+    expect(created.status).toBe("created");
+    if (created.status !== "created") throw new Error("intent refused");
+
+    const [before] = await sql`
+      SELECT last_position, current_log_head_hash FROM conversations
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    const proposals = createExternalProposalStore({
+      sql,
+      signer: {
+        signCheckpointDigest: async (_keyId, digest) =>
+          signFictionalDeliveryCheckpointDigestForTesting(
+            Buffer.from(digest, "base64url"),
+          ).toString("base64url"),
+      },
+    });
+    const publicMessage = Buffer.from("fictional-mls-public-message", "utf8");
+    const authorizationRecordHash = Buffer.alloc(32, 0xa7).toString(
+      "base64url",
+    );
+    const recorded = await proposals.recordProposal({
+      intentId: created.intentId,
+      publicMessage: publicMessage.toString("base64url"),
+      authorizationRecordHash,
+      signerExternalSenderCredentialId: EXTERNAL_SENDER_ID,
+      transparencyCheckpointId: CHECKPOINT_ID,
+    });
+    expect(recorded.status).toBe("recorded");
+    if (recorded.status !== "recorded") throw new Error("proposal refused");
+    expect(recorded.proposalHash).toBe(
+      computeExternalProposalHash(
+        publicMessage,
+        authorizationRecordHash as Hash32,
+      ),
+    );
+
+    // The envelope extends the gap-free log and the chained head.
+    const [after] = await sql`
+      SELECT last_position, current_log_head_hash FROM conversations
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(String(after.last_position)).toBe(
+      String(BigInt(String(before.last_position)) + 1n),
+    );
+    expect(recorded.envelopePosition).toBe(String(after.last_position));
+    const [envelope] = await sql`
+      SELECT envelope_class, sender_type, leaf_hash, previous_head_hash,
+             head_hash
+      FROM envelopes
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}
+        AND position = ${recorded.envelopePosition}`;
+    expect(String(envelope.envelope_class)).toBe("external_proposal");
+    expect(String(envelope.sender_type)).toBe("entitlement_signer");
+    expect(
+      Buffer.compare(
+        envelope.previous_head_hash as Buffer,
+        before.current_log_head_hash as Buffer,
+      ),
+    ).toBe(0);
+    const expectedHead = computeLogHeadHash(
+      (before.current_log_head_hash as Buffer).toString("base64url") as Hash32,
+      (envelope.leaf_hash as Buffer).toString("base64url") as Hash32,
+    );
+    expect((envelope.head_hash as Buffer).toString("base64url")).toBe(
+      expectedHead,
+    );
+    expect((after.current_log_head_hash as Buffer).toString("base64url")).toBe(
+      expectedHead,
+    );
+
+    await expect(store.readIntent(created.intentId)).resolves.toMatchObject({
+      state: "proposed",
+    });
+    // A second recording for the same intent is refused: the intent already
+    // left the requested/authorized states.
+    await expect(
+      proposals.recordProposal({
+        intentId: created.intentId,
+        publicMessage: publicMessage.toString("base64url"),
+        authorizationRecordHash,
+        signerExternalSenderCredentialId: EXTERNAL_SENDER_ID,
+        transparencyCheckpointId: CHECKPOINT_ID,
+      }),
+    ).resolves.toEqual({
+      status: "refused",
+      reasonCode: "intent-not-live",
+    });
+
+    // Leave the shared conversation appendable for the drills.
+    const cancelled = await store.cancelIntent(
+      created.intentId,
+      LAB_INSTALLATION_ID,
+    );
+    expect(cancelled).toMatchObject({ status: "resolved", state: "cancelled" });
   });
 });
