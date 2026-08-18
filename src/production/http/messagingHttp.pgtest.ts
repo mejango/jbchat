@@ -1042,6 +1042,15 @@ describeStorage("messaging HTTP surface", () => {
     });
     expect(events.nextCursor.startsWith("cc1.")).toBe(true);
 
+    // Every member holds its own byte-exact custody fence.
+    const fences = await sql`
+      SELECT installation_id FROM delivery_sender_fences
+      WHERE conversation_id = ${plan.conversationId}
+      ORDER BY installation_id`;
+    expect(fences.map((row) => String(row.installation_id)).sort()).toEqual(
+      [customer.installationId, owner.installationId].sort(),
+    );
+
     // The owner's mailbox item carries the Welcome via mls_welcomes.
     const welcomes = await sql`
       SELECT target_installation_id FROM mls_welcomes

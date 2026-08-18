@@ -50,6 +50,7 @@ import {
   type PendingApplicationAppendIntent,
 } from "../delivery/service";
 import {
+  computeApplicationAppendQuotaScopeHash,
   computeLockedApplicationAppendSnapshotDigest,
   parseApplicationAppendFanoutPlan,
   parseLockedApplicationAppendSnapshot,
@@ -181,9 +182,32 @@ async function reconstructAuthoritySnapshot(
   if (usageRows.length !== 1) throw graphError("usage");
   const u = usageRows[0];
 
-  const bindingRows = await tx`
+  // Multi-sender conversations carry installation/account-scoped binding
+  // rows for EVERY member; each sender's snapshot selects the shared rows
+  // plus exactly its own installation/account rows.
+  const allBindingRows = await tx`
     SELECT * FROM conversation_quota_bindings
     WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
+  const senderInstallationScopeHash = computeApplicationAppendQuotaScopeHash({
+    realmId: String(c.realm_id),
+    scope: "installation",
+    subjectId: String(g.installation_id),
+  });
+  const senderAccountScopeHash = computeApplicationAppendQuotaScopeHash({
+    realmId: String(c.realm_id),
+    scope: "account",
+    subjectId: String(m.account_id),
+  });
+  const bindingRows = allBindingRows.filter((row) => {
+    const scope = String(row.scope_type);
+    if (scope === "installation") {
+      return b64(row.scope_hash as Uint8Array) === senderInstallationScopeHash;
+    }
+    if (scope === "account") {
+      return b64(row.scope_hash as Uint8Array) === senderAccountScopeHash;
+    }
+    return true;
+  });
   if (bindingRows.length === 0) throw graphError("quota-bindings");
 
   const quotaBindings: Record<string, unknown>[] = [];
@@ -353,11 +377,15 @@ async function reconstructAuthoritySnapshot(
       authorizedSendGrantSetHash: b64(
         h.authorized_send_grant_set_hash as Uint8Array,
       ),
+      // The head attests the SENDER's grant; the anchor caches one
+      // selected pair, so the snapshot pairs the head with the locked
+      // grant row. The grant digest itself is still recomputed from the
+      // grant's fields by the kernel, so nothing weakens.
       selectedSendGrantEvidenceDigest: b64(
-        h.selected_send_grant_evidence_digest as Uint8Array,
+        g.grant_evidence_digest as Uint8Array,
       ),
       selectedSendGrantInclusionEvidenceDigest: b64(
-        h.selected_send_grant_inclusion_evidence_digest as Uint8Array,
+        g.grant_inclusion_evidence_digest as Uint8Array,
       ),
       authorizedQuotaPolicyDigest: b64(
         h.authorized_quota_policy_digest as Uint8Array,
@@ -493,15 +521,36 @@ export async function refreshCustodySnapshotDigest(
     SELECT conversation_id FROM delivery_conversation_authority
     WHERE conversation_id = ${conversationId} FOR UPDATE`;
   if (custody.length === 0) return;
-  const rebuilt = await reconstructAuthoritySnapshot(
-    tx,
-    conversationId as ConversationId,
-  );
-  await tx`
-    UPDATE delivery_conversation_authority SET
-      snapshot_digest = ${bytea(rebuilt.snapshotDigest)},
-      row_version = row_version + 1
-    WHERE conversation_id = ${conversationId}`;
+  const grants = await tx`
+    SELECT installation_id FROM conversation_send_grants
+    WHERE conversation_id = ${conversationId}
+    ORDER BY installation_id`;
+  let legacyDigest: string | null = null;
+  for (const grant of grants) {
+    const rebuilt = await reconstructAuthoritySnapshot(
+      tx,
+      conversationId as ConversationId,
+      { installationId: String(grant.installation_id) },
+    );
+    legacyDigest ??= rebuilt.snapshotDigest;
+    await tx`
+      INSERT INTO delivery_sender_fences (
+        conversation_id, installation_id, snapshot_digest, updated_at
+      ) VALUES (
+        ${conversationId}, ${String(grant.installation_id)},
+        ${bytea(rebuilt.snapshotDigest)}, now()
+      ) ON CONFLICT (conversation_id, installation_id) DO UPDATE SET
+        snapshot_digest = EXCLUDED.snapshot_digest,
+        row_version = delivery_sender_fences.row_version + 1,
+        updated_at = now()`;
+  }
+  if (legacyDigest !== null) {
+    await tx`
+      UPDATE delivery_conversation_authority SET
+        snapshot_digest = ${bytea(legacyDigest)},
+        row_version = row_version + 1
+      WHERE conversation_id = ${conversationId}`;
+  }
 }
 
 export function createPostgresDeliveryAppendStore(
@@ -548,7 +597,17 @@ export function createPostgresDeliveryAppendStore(
 
     const rebuilt = await reconstructAuthoritySnapshot(tx, conversationId, sender);
     const { snapshot, snapshotDigest, roster, recipients } = rebuilt;
-    if (snapshotDigest !== b64(custodyRow.snapshot_digest)) {
+    let fenceDigest = b64(custodyRow.snapshot_digest);
+    if (sender) {
+      const fences = await tx`
+        SELECT snapshot_digest FROM delivery_sender_fences
+        WHERE conversation_id = ${conversationId}
+          AND installation_id = ${sender.installationId}`;
+      if (fences.length === 1) {
+        fenceDigest = b64(fences[0].snapshot_digest as Uint8Array);
+      }
+    }
+    if (snapshotDigest !== fenceDigest) {
       throw new Error(
         "Reconstructed authority snapshot does not match the custody digest fence.",
       );
@@ -1112,8 +1171,6 @@ export function createPostgresDeliveryAppendStore(
             })),
             quotas: quotas.map((quota) => ({ ...quota })),
           });
-          const nextSnapshotDigest =
-            computeLockedApplicationAppendSnapshotDigest(nextSnapshot);
           const receipt = receiptFromStoredApplicationEnvelope(signedEnvelope);
           const acceptedIntent = acceptedApplicationAppendIntentFromPending(
             pending,
@@ -1133,12 +1190,6 @@ export function createPostgresDeliveryAppendStore(
             finalizedAt: observedAt,
           });
 
-          await tx`
-            UPDATE delivery_conversation_authority SET
-              snapshot_digest = ${bytea(nextSnapshotDigest)},
-              row_version = row_version + 1,
-              updated_at = ${observedAt}::timestamptz
-            WHERE conversation_id = ${signedEnvelope.conversationId}`;
           await tx`
             UPDATE conversations SET
               last_position = ${signedEnvelope.position},
@@ -1302,6 +1353,12 @@ export function createPostgresDeliveryAppendStore(
               ${bytea(nextSnapshot.policyHead.policyHeadHash)},
               ${signedEnvelope.position}, ${observedAt}::timestamptz
             ) ON CONFLICT (conversation_id, policy_head_sequence) DO NOTHING`;
+          // Every sender's fence moves when the graph moves; nextSnapshot
+          // is the SENDER's view, the refresh recomputes the rest.
+          await refreshCustodySnapshotDigest(
+            tx,
+            signedEnvelope.conversationId,
+          );
           const semanticallyEqual = applicationEnvelopeSemanticallyEqual(
             pending.admissionCommand.semanticIdentity,
             command.semanticIdentity,
@@ -1462,14 +1519,7 @@ export function createPostgresDeliveryAppendStore(
             })),
             quotas: releasedQuotas.map((quota) => ({ ...quota })),
           });
-          await tx`
-            UPDATE delivery_conversation_authority SET
-              snapshot_digest = ${bytea(
-                computeLockedApplicationAppendSnapshotDigest(retiredSnapshot),
-              )},
-              row_version = row_version + 1,
-              updated_at = ${observedAt}::timestamptz
-            WHERE conversation_id = ${pending.envelope.conversationId}`;
+          void retiredSnapshot;
           await tx`
             DELETE FROM application_append_pendings
             WHERE conversation_id = ${pending.envelope.conversationId}`;
@@ -1484,6 +1534,10 @@ export function createPostgresDeliveryAppendStore(
               ${bytea(fenceTokenHashOf(pending.reservationFence))},
               ${observedAt}::timestamptz
             )`;
+          await refreshCustodySnapshotDigest(
+            tx,
+            pending.envelope.conversationId,
+          );
           return retiredResultFor(command, pendingIntentDigest, observedAt, observedAt);
         }),
     },

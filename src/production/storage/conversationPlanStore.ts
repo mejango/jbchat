@@ -703,6 +703,33 @@ export function createConversationPlanStore(
           projectRefId,
           new Date(plan.created_at as Date).toISOString(),
         );
+        // Every non-creator member additionally gets its own
+        // installation/account-scoped rows; each sender's snapshot selects
+        // exactly its five.
+        const memberScopedBindings = (
+          plan.roster_canonical && true
+            ? ((typeof plan.roster_canonical === "string"
+                ? JSON.parse(plan.roster_canonical as string)
+                : plan.roster_canonical) as {
+                accountId: string;
+                installationId: string;
+                bootstrapMode: string;
+              }[])
+            : []
+        )
+          .filter((member) => member.bootstrapMode !== "creator")
+          .flatMap((member) =>
+            quotaBindingsFor(
+              conversationId,
+              member.accountId,
+              member.installationId,
+              projectRefId,
+              new Date(plan.created_at as Date).toISOString(),
+            ).filter(
+              (binding) =>
+                binding.scope === "installation" || binding.scope === "account",
+            ),
+          );
         const rosterProjection = rosterCanonical.map((member) => ({
           conversationId,
           conversationGeneration: generation,
@@ -797,7 +824,7 @@ export function createConversationPlanStore(
             0, ${Buffer.from(recipientSetHash, "base64url")}
           )`;
 
-        for (const binding of quotaBindings) {
+        for (const binding of [...quotaBindings, ...memberScopedBindings]) {
           await tx`
             INSERT INTO quota_scopes (
               scope_type, scope_hash, realm_id, subject_id, created_at
@@ -824,7 +851,10 @@ export function createConversationPlanStore(
             ${plan.quota_policy_digest as Buffer},
             ${JSON.stringify(quotaBindings)}::jsonb, ${now}::timestamptz
           ) ON CONFLICT DO NOTHING`;
-        for (const [ordinal, binding] of quotaBindings.entries()) {
+        for (const [ordinal, binding] of [
+          ...quotaBindings,
+          ...memberScopedBindings,
+        ].entries()) {
           await tx`
             INSERT INTO conversation_quota_bindings (
               conversation_id, quota_policy_digest, scope_type, scope_hash,
@@ -916,56 +946,65 @@ export function createConversationPlanStore(
           FROM external_sender_credentials
           WHERE external_sender_credential_id =
                 ${String(provision.current_external_sender_credential_id)}`;
-        // The creator's send grant with its REAL evidence digest over the
-        // exact row values the reconstruction re-reads. The grant's policy
-        // head pointer uses the all-zero hash at sequence one: the digest
-        // must exist BEFORE the head that carries it is signed, so the
-        // genesis grant anchors to the zero prior head by construction.
+        // EVERY member gets a send grant with its REAL evidence digest
+        // over the exact row values the reconstruction re-reads, so every
+        // member has a per-sender custody fence and can append. Genesis
+        // grants anchor to the zero prior head: the digests must exist
+        // BEFORE the head that carries them is signed.
         const creatorRosterMember = rosterCanonical.find(
           (member) => member.bootstrapMode === "creator",
         )!;
-        const creatorGrantCredentialId = roleCredentialId(
-          creatorRosterMember.installationId,
-          conversationId,
-        );
         const issuedSequence = "1";
-        const grantWithoutDigests = {
-          conversationId,
-          installationId: creatorRosterMember.installationId,
-          credentialId: creatorGrantCredentialId,
-          conversationKind: "purchase_support",
-          conversationGeneration: generation,
-          role: creatorRosterMember.role,
-          roleCredentialId: creatorGrantCredentialId,
-          roleCredentialFingerprint: creatorRosterMember.credentialFingerprint,
-          roleCredentialSubjectAccountId: creatorRosterMember.accountId,
-          roleCredentialSubjectInstallationId:
-            creatorRosterMember.installationId,
-          roleCredentialValidFrom: now,
-          roleCredentialValidUntil: credentialExpiry,
-          capability: "send_application",
-          state: "active",
-          policyRevision: "1",
-          policyHeadSequence: issuedSequence,
-          policyHeadHash: ZERO_HASH32,
-          expiresAt: credentialExpiry,
-        };
-        const grantEvidenceDigest = computeConversationSendGrantEvidenceDigest(
-          grantWithoutDigests as never,
-        );
-        const grantInclusionEvidenceDigest = deriveSeed(
-          "send-grant-inclusion",
-          `${conversationId}:${creatorRosterMember.installationId}`,
-        ).toString("base64url");
-        const sendGrantSetMembers = [
-          {
-            grantEvidenceDigest,
-            grantInclusionEvidenceDigest,
-            installationId: creatorRosterMember.installationId,
-            credentialId: creatorGrantCredentialId,
-            role: creatorRosterMember.role,
-          },
-        ];
+        const memberGrants = rosterCanonical.map((member) => {
+          const credentialId = roleCredentialId(
+            member.installationId,
+            conversationId,
+          );
+          const grantWithoutDigests = {
+            conversationId,
+            installationId: member.installationId,
+            credentialId,
+            conversationKind: "purchase_support",
+            conversationGeneration: generation,
+            role: member.role,
+            roleCredentialId: credentialId,
+            roleCredentialFingerprint: member.credentialFingerprint,
+            roleCredentialSubjectAccountId: member.accountId,
+            roleCredentialSubjectInstallationId: member.installationId,
+            roleCredentialValidFrom: now,
+            roleCredentialValidUntil: credentialExpiry,
+            capability: "send_application",
+            state: "active",
+            policyRevision: "1",
+            policyHeadSequence: issuedSequence,
+            policyHeadHash: ZERO_HASH32,
+            expiresAt: credentialExpiry,
+          };
+          return {
+            member,
+            credentialId,
+            grantEvidenceDigest: computeConversationSendGrantEvidenceDigest(
+              grantWithoutDigests as never,
+            ),
+            grantInclusionEvidenceDigest: deriveSeed(
+              "send-grant-inclusion",
+              `${conversationId}:${member.installationId}`,
+            ).toString("base64url"),
+          };
+        });
+        const creatorGrant = memberGrants.find(
+          (grant) => grant.member.bootstrapMode === "creator",
+        )!;
+        const grantEvidenceDigest = creatorGrant.grantEvidenceDigest;
+        const grantInclusionEvidenceDigest =
+          creatorGrant.grantInclusionEvidenceDigest;
+        const sendGrantSetMembers = memberGrants.map((grant) => ({
+          grantEvidenceDigest: grant.grantEvidenceDigest,
+          grantInclusionEvidenceDigest: grant.grantInclusionEvidenceDigest,
+          installationId: grant.member.installationId,
+          credentialId: grant.credentialId,
+          role: grant.member.role,
+        }));
         const issued = await issuance.issuePolicyHead({
           conversationId,
           policyId: String(provision.policy_id),
@@ -1053,32 +1092,34 @@ export function createConversationPlanStore(
             ${now}::timestamptz
           )`;
 
-        // The creator's send grant (v1: single-grant custody fence). Every
-        // column mirrors the digest-covered values exactly.
+        // Send grants for every member; each column mirrors the
+        // digest-covered values exactly.
         const creatorMember = creatorRosterMember;
-        await tx`
-          INSERT INTO conversation_send_grants (
-            conversation_id, installation_id, credential_id,
-            conversation_kind, conversation_generation, role,
-            role_credential_id, role_credential_fingerprint,
-            role_credential_subject_account_id,
-            role_credential_subject_installation_id,
-            role_credential_valid_from, role_credential_valid_until,
-            capability, state, policy_revision, policy_head_sequence,
-            policy_head_hash, expires_at, grant_evidence_digest,
-            grant_inclusion_evidence_digest
-          ) VALUES (
-            ${conversationId}, ${creatorMember.installationId},
-            ${creatorGrantCredentialId}, 'purchase_support', ${generation},
-            ${creatorMember.role}, ${creatorGrantCredentialId},
-            ${Buffer.from(creatorMember.credentialFingerprint, "base64url")},
-            ${creatorMember.accountId}, ${creatorMember.installationId},
-            ${now}::timestamptz, ${credentialExpiry}::timestamptz,
-            'send_application', 'active', 1, ${issuedSequence},
-            ${Buffer.alloc(32)}, ${credentialExpiry}::timestamptz,
-            ${Buffer.from(grantEvidenceDigest, "base64url")},
-            ${Buffer.from(grantInclusionEvidenceDigest, "base64url")}
-          )`;
+        for (const grant of memberGrants) {
+          await tx`
+            INSERT INTO conversation_send_grants (
+              conversation_id, installation_id, credential_id,
+              conversation_kind, conversation_generation, role,
+              role_credential_id, role_credential_fingerprint,
+              role_credential_subject_account_id,
+              role_credential_subject_installation_id,
+              role_credential_valid_from, role_credential_valid_until,
+              capability, state, policy_revision, policy_head_sequence,
+              policy_head_hash, expires_at, grant_evidence_digest,
+              grant_inclusion_evidence_digest
+            ) VALUES (
+              ${conversationId}, ${grant.member.installationId},
+              ${grant.credentialId}, 'purchase_support', ${generation},
+              ${grant.member.role}, ${grant.credentialId},
+              ${Buffer.from(grant.member.credentialFingerprint, "base64url")},
+              ${grant.member.accountId}, ${grant.member.installationId},
+              ${now}::timestamptz, ${credentialExpiry}::timestamptz,
+              'send_application', 'active', 1, ${issuedSequence},
+              ${Buffer.alloc(32)}, ${credentialExpiry}::timestamptz,
+              ${Buffer.from(grant.grantEvidenceDigest, "base64url")},
+              ${Buffer.from(grant.grantInclusionEvidenceDigest, "base64url")}
+            )`;
+        }
 
         // The position-one Commit envelope, chained and signed.
         const envelopeId = String(mls.envelopeId);
