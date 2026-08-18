@@ -1,12 +1,17 @@
 import { Buffer } from "node:buffer";
 import {
   createHash,
+  createPrivateKey,
+  createPublicKey,
   generateKeyPairSync,
   randomBytes,
   randomUUID,
   sign as signNode,
   type KeyObject,
 } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql } from "postgres";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -27,6 +32,12 @@ import {
 import { setDeliveryLabClock } from "../storage/postgresDeliveryLab.testing";
 import { createInProcessDpopReplayGuard } from "./dpop";
 import { createMessagingHttpHandlers } from "./messagingHttp";
+import {
+  composeDeploymentManifest,
+  signDeploymentManifest,
+} from "../entitlement/manifestTooling";
+import { JUICEBOX_V6_EVENT_TOPICS } from "../authority/purchases";
+import type { JsonRpcTransport } from "../chain/jsonRpc";
 
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
 const describeStorage = DATABASE_URL ? describe : describe.skip;
@@ -129,21 +140,26 @@ describeStorage("messaging HTTP surface", () => {
     });
   };
 
-  const enrollOverHttp = async (): Promise<EnrolledDevice> => {
+  const enrollOverHttp = async (
+    handlersArg?: ReturnType<typeof createMessagingHttpHandlers>,
+    chainId?: string,
+  ): Promise<EnrolledDevice & { walletAddress: string }> => {
+    const activeHandlers = handlersArg ?? handlers;
+    const activeChainId = chainId ?? FIXTURE_CHAIN_ID;
     const walletPriv = Buffer.from(secp256k1.utils.randomSecretKey());
     const walletAddress = `0x${Buffer.from(
       keccak_256(secp256k1.getPublicKey(walletPriv, false).subarray(1)),
     )
       .subarray(-20)
       .toString("hex")}`;
-    const walletRef = `${FIXTURE_CHAIN_ID}:${walletAddress}`;
+    const walletRef = `${activeChainId}:${walletAddress}`;
     const possession = generateKeyPairSync("ec", { namedCurve: "P-256" });
     const jwk = possession.publicKey.export({ format: "jwk" }) as Record<
       string,
       string
     >;
 
-    const allocated = await handlers.allocateEnrollment(
+    const allocated = await activeHandlers.allocateEnrollment(
       jsonRequest("POST", "/v1/device-enrollments", {
         walletRef,
         proofProfile: "siwe-erc4361-v1",
@@ -168,7 +184,7 @@ describeStorage("messaging HTTP surface", () => {
       Authorization: `Enrollment ${allocation.enrollmentResultHandle}`,
     };
 
-    const challenged = await handlers.issueChallenges(
+    const challenged = await activeHandlers.issueChallenges(
       jsonRequest(
         "POST",
         `/v1/device-enrollments/${allocation.enrollmentId}/challenges`,
@@ -205,7 +221,7 @@ describeStorage("messaging HTTP surface", () => {
       ),
     ).toString("base64url");
 
-    const completed = await handlers.completeEnrollment(
+    const completed = await activeHandlers.completeEnrollment(
       jsonRequest(
         "POST",
         `/v1/device-enrollments/${allocation.enrollmentId}/complete`,
@@ -238,6 +254,7 @@ describeStorage("messaging HTTP surface", () => {
       accessToken: issued.accessToken,
       refreshToken: issued.refreshToken,
       privateKey: possession.privateKey,
+      walletAddress,
     };
   };
 
@@ -257,6 +274,7 @@ describeStorage("messaging HTTP surface", () => {
         logSigner: null,
         cursor: { keyId: "lab-http-cursor", key: Buffer.alloc(32, 0x61) },
         rpcEndpoints: null,
+        manifest: null,
       }),
       connect: () => sql,
       now: () => NOW,
@@ -604,7 +622,298 @@ describeStorage("messaging HTTP surface", () => {
     );
     expect(committerPage.status).toBe(200);
   });
+
+  it("turns a finalized purchase receipt into a support-chat admission", async () => {
+    // Ratify the eip155:8453 profile row exactly as the seed script does.
+    const profileSet = JSON.parse(
+      readFileSync(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "../../../config/finality-profiles.v1.json",
+        ),
+        "utf8",
+      ),
+    ) as {
+      profiles: {
+        finalityProfileId: string;
+        profileRevision: number;
+        chainId: string;
+        canonicalDocument: unknown;
+        adapterReleaseId: string;
+        ratificationEvidenceRef: string;
+      }[];
+    };
+    const base = profileSet.profiles.find(
+      (profile) => profile.chainId === "eip155:8453",
+    )!;
+    const baseCanonical = JSON.stringify(base.canonicalDocument);
+    // The lab may already hold an active eip155:8453 profile (one active
+    // row per chain is a partial unique index); reuse it, seed otherwise.
+    await sql`
+      INSERT INTO chain_finality_profiles (
+        finality_profile_id, profile_revision, chain_id, canonical_document,
+        profile_hash, adapter_release_id, ratification_evidence_ref, state,
+        effective_at, created_at
+      )
+      SELECT ${base.finalityProfileId}, ${base.profileRevision}, 'eip155:8453',
+             ${baseCanonical}::jsonb,
+             ${createHash("sha256").update(baseCanonical, "utf8").digest()},
+             ${base.adapterReleaseId}, ${base.ratificationEvidenceRef},
+             'active', ${NOW}::timestamptz, ${NOW}::timestamptz
+      WHERE NOT EXISTS (
+        SELECT 1 FROM chain_finality_profiles
+        WHERE chain_id = 'eip155:8453' AND state = 'active'
+      )`;
+    const [activeProfile] = await sql`
+      SELECT finality_profile_id, profile_revision, profile_hash
+      FROM chain_finality_profiles
+      WHERE chain_id = 'eip155:8453' AND state = 'active'`;
+    const activeProfileId = String(activeProfile.finality_profile_id);
+    const activeProfileRevision = String(activeProfile.profile_revision);
+    const activeProfileHash = Buffer.from(
+      activeProfile.profile_hash as Uint8Array,
+    );
+
+    // A second handlers instance whose wallet verifier speaks eip155:8453
+    // and whose eligibility lane uses a manifest composed and signed by
+    // the real tooling against the scripted chain.
+    const terminal = `0x${"77".repeat(20)}`;
+    const terminalCode = Buffer.from("60806040fe", "hex");
+    const txHash = `0x${"9a".repeat(32)}`;
+    const blockHash = `0x${"8b".repeat(32)}`;
+    const receiptHeight = 0x2000n;
+    let payData: string | null = null;
+    const scripted = (providerId: string): JsonRpcTransport =>
+      Object.freeze({
+        providerId,
+        async request(method: string, params: readonly unknown[]) {
+          if (method === "eth_getTransactionReceipt") {
+            return {
+              transactionHash: txHash,
+              transactionIndex: "0x1",
+              status: "0x1",
+              blockNumber: `0x${receiptHeight.toString(16)}`,
+              blockHash,
+              logs: [
+                {
+                  logIndex: "0x3",
+                  address: terminal,
+                  topics: [
+                    JUICEBOX_V6_EVENT_TOPICS.pay,
+                    `0x${"05".repeat(32)}`,
+                    `0x${(9n).toString(16).padStart(64, "0")}`,
+                    `0x${(2n).toString(16).padStart(64, "0")}`,
+                  ],
+                  data: payData,
+                },
+              ],
+            };
+          }
+          if (method === "eth_getBlockByNumber") {
+            if (params[0] === "finalized") {
+              return { number: `0x${(receiptHeight + 8n).toString(16)}` };
+            }
+            return { number: params[0], hash: blockHash };
+          }
+          if (method === "eth_getCode") {
+            return `0x${terminalCode.toString("hex")}`;
+          }
+          throw new Error(`unexpected method ${method}`);
+        },
+      });
+    const registry = {
+      transportsFor: (chainNumber: number) =>
+        chainNumber === 8453 ? [scripted("prov-a"), scripted("prov-b")] : null,
+    };
+    const manifest = await composeDeploymentManifest(
+      {
+        kind: "jbm-deployment-manifest-source.v1",
+        manifestId: "jbm-lab-manifest-1",
+        adapterRevision: "jbm-evm-adapter.1",
+        chains: [
+          {
+            chainId: 8453,
+            projectsContract: `0x${"22".repeat(20)}`,
+            terminals: [terminal],
+            tierHooks: [],
+          },
+        ],
+      },
+      () => [scripted("prov-a"), scripted("prov-b")],
+    );
+    const manifestSeed = Buffer.alloc(32, 0x62);
+    const envelope = signDeploymentManifest(
+      manifest,
+      "lab-manifest-signer",
+      manifestSeed,
+    );
+    const manifestPath = join(
+      process.env.TMPDIR ?? "/tmp",
+      `jbm-lab-manifest-${Date.now()}.json`,
+    );
+    writeFileSync(manifestPath, JSON.stringify(envelope));
+    const signerPublic = createPublicKey(
+      createPrivateKey({
+        key: Buffer.concat([
+          Buffer.from("302e020100300506032b657004220420", "hex"),
+          manifestSeed,
+        ]),
+        format: "der",
+        type: "pkcs8",
+      }),
+    )
+      .export({ format: "jwk" })
+      .x as string;
+
+    const identitySecret = Buffer.alloc(32, 0x5f);
+    const handlers8453 = createMessagingHttpHandlers({
+      loadConfig: () => ({
+        status: "configured",
+        databaseUrl: DATABASE_URL!,
+        identitySecret,
+        credentialSignerKeyId: "lab-http-credential-signer",
+        credentialSignerSeed: Buffer.alloc(32, 0x60),
+        allowedChainIds: ["eip155:8453"],
+        logSigner: null,
+        cursor: { keyId: "lab-http-cursor", key: Buffer.alloc(32, 0x61) },
+        rpcEndpoints: null,
+        manifest: {
+          path: manifestPath,
+          signerPublicKey: Buffer.from(signerPublic, "base64url"),
+        },
+      }),
+      connect: () => sql,
+      now: () => NOW,
+      walletProofVerifier: createFictionalWalletProofVerifier({
+        finalityProfileId: activeProfileId,
+        finalityProfileRevision: activeProfileRevision,
+        finalityProfileHash: activeProfileHash,
+        finalizedChainId: "eip155:8453",
+        finalizedBlock: "8200",
+        finalizedBlockHash: Buffer.alloc(32, 0x8b),
+        providerQuorumHash: Buffer.alloc(32, 0x8c),
+      }),
+      chainRegistry: registry,
+      replayGuard: createInProcessDpopReplayGuard({
+        nowEpochMilliseconds: () => NOW_MS,
+      }),
+    });
+
+    const customer = await enrollOverHttp(handlers8453, "eip155:8453");
+    payData = encodePayEventData(customer.walletAddress);
+
+    const claimResponse = await handlers8453.createPurchaseClaim(
+      authedRequest(
+        customer,
+        "POST",
+        "/v1/eligibility/purchase-claims",
+        {
+          projectRefId: String(pre.project_ref_id),
+          walletRef: `eip155:8453:${customer.walletAddress}`,
+          transactionHash: txHash,
+          payLogIndex: 3,
+          terminal,
+        },
+      ),
+    );
+    if (claimResponse.status !== 201) {
+      throw new Error(
+        `claim refused: ${claimResponse.status} ${await claimResponse.text()}`,
+      );
+    }
+    const issued = (await claimResponse.json()) as {
+      grantId: string;
+      claimHandle: string;
+      capability: string;
+      validUntil: string;
+    };
+    expect(issued.capability).toBe("purchase-support");
+    const [grantRow] = await sql`
+      SELECT state, capability, source_chain_id FROM eligibility_grants
+      WHERE grant_id = ${issued.grantId}`;
+    expect(String(grantRow.state)).toBe("active");
+    expect(String(grantRow.source_chain_id)).toBe("eip155:8453");
+
+    // The one-time claim handle admits the buyer into the support chat.
+    await sql`
+      INSERT INTO role_credentials (
+        credential_id, conversation_id, installation_id, account_id,
+        policy_id, policy_revision, role, credential_public,
+        credential_fingerprint, issued_at, expires_at, revocation_version,
+        state
+      ) VALUES (
+        '00000000-0000-4000-8000-0000000b0020', ${LAB_CONVERSATION_ID},
+        ${customer.installationId}, ${customer.accountId}, ${POLICY_ID}, 1,
+        'customer', ${Buffer.alloc(32, 0xbb)}, ${Buffer.alloc(32, 0xbb)},
+        ${NOW}::timestamptz, ${NOW}::timestamptz + interval '30 days', 1,
+        'active'
+      )`;
+    const intentResponse = await handlers.createMembershipIntent(
+      authedRequest(
+        committer,
+        "POST",
+        `/v1/conversations/${LAB_CONVERSATION_ID}/membership-intents`,
+        {
+          operation: "add",
+          targetInstallationId: customer.installationId,
+          eligibilityClaimHandle: issued.claimHandle,
+        },
+      ),
+      LAB_CONVERSATION_ID,
+    );
+    expect(intentResponse.status).toBe(201);
+    const intent = (await intentResponse.json()) as { intentId: string };
+
+    // Leave the shared conversation appendable for the drills.
+    const cancel = await handlers.cancelMembershipIntent(
+      authedRequest(
+        committer,
+        "DELETE",
+        `/v1/conversations/${LAB_CONVERSATION_ID}/membership-intents/${intent.intentId}`,
+      ),
+      LAB_CONVERSATION_ID,
+      intent.intentId,
+    );
+    expect(cancel.status).toBe(200);
+  });
 });
+
+function encodePayEventData(beneficiary: string): string {
+  const word = (value: bigint): Buffer => {
+    const buffer = Buffer.alloc(32);
+    let remaining = value;
+    for (let index = 31; index >= 0 && remaining > 0n; index -= 1) {
+      buffer[index] = Number(remaining & 0xffn);
+      remaining >>= 8n;
+    }
+    return buffer;
+  };
+  const addressWord = (address: string): Buffer =>
+    Buffer.concat([Buffer.alloc(12), Buffer.from(address.slice(2), "hex")]);
+  const padded = (bytes: Buffer): Buffer => {
+    const padLength = (32 - (bytes.byteLength % 32)) % 32;
+    return Buffer.concat([
+      word(BigInt(bytes.byteLength)),
+      bytes,
+      Buffer.alloc(padLength),
+    ]);
+  };
+  const memoTail = padded(Buffer.from("gm", "utf8"));
+  const head = [
+    addressWord(`0x${"66".repeat(20)}`),
+    addressWord(beneficiary),
+    word(2_500_000n),
+    word(9_000n),
+    word(BigInt(7 * 32)),
+    word(BigInt(7 * 32 + memoTail.byteLength)),
+    addressWord(`0x${"67".repeat(20)}`),
+  ];
+  return `0x${Buffer.concat([
+    ...head,
+    memoTail,
+    padded(Buffer.from("beef", "hex")),
+  ]).toString("hex")}`;
+}
 
 function deviceCredentialId(byte: number): string {
   return `00000000-0000-4000-8000-0000000000${byte.toString(16)}`;

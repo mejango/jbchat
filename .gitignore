@@ -16,3 +16,4 @@ out/
 # ignores generated/internal directories named `docs` by default.
 !docs/
 !docs/**
+deployment-manifest.signed.json

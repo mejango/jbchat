@@ -1,0 +1,71 @@
+{
+  "kind": "jbm-deployment-manifest-source.v1",
+  "manifestId": "jbm-deploy-manifest-2026q3",
+  "adapterRevision": "jbm-evm-adapter.1",
+  "chains": [
+    {
+      "chainId": 1,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    },
+    {
+      "chainId": 10,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    },
+    {
+      "chainId": 8453,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    },
+    {
+      "chainId": 42161,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    },
+    {
+      "chainId": 11155111,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    },
+    {
+      "chainId": 11155420,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    },
+    {
+      "chainId": 84532,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    },
+    {
+      "chainId": 421614,
+      "projectsContract": "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+      "terminals": [
+        "0x130f5dd2bd8805443cf41755253d778a75a67f53"
+      ],
+      "tierHooks": []
+    }
+  ]
+}

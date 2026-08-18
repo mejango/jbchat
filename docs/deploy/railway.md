@@ -28,6 +28,16 @@ Services:
     wallet-proof verification stays fail-closed unavailable (503 on
     enrollment completion) until the chain adapters ship — the routes
     exist, but no credential can be issued in production yet.
+  - Eligibility lane (POST /v1/eligibility/purchase-claims):
+    `JBM_DEPLOYMENT_MANIFEST_PATH` (the signed envelope produced by
+    `node scripts/manifest/build-deployment-manifest.mjs`) +
+    `JBM_MANIFEST_SIGNER_PUBLIC_KEY` (32 bytes base64url). The lane also
+    needs `JBM_RPC_ENDPOINTS` and the seeded ADR 0005 profile rows
+    (`node scripts/storage/seed-finality-profiles.mjs`).
+  - Keeper: run `node scripts/keeper/recheck-grants.mjs` on a 60-second
+    cadence (Railway cron) with `JBM_STORAGE_DATABASE_URL` +
+    `JBM_RPC_ENDPOINTS`; it revokes orphaned-anchor grants, suspends
+    chains that lose quorum, and sweeps expired leases.
   - The witness variables are NEVER set here — their absence is what
     keeps every witness route a fail-closed 404 on this deployment.
 - **postgres** — Railway PostgreSQL. Acceptance for G2 promotion: rerun

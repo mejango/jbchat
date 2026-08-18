@@ -28,6 +28,10 @@ export type MessagingRuntimeConfig =
       readonly rpcEndpoints: Readonly<
         Record<string, readonly RpcEndpointConfig[]>
       > | null;
+      readonly manifest: {
+        readonly path: string;
+        readonly signerPublicKey: Buffer;
+      } | null;
     }
   | { readonly status: "unconfigured" };
 
@@ -89,6 +93,10 @@ export function loadMessagingRuntimeConfig(
     logSigner,
     cursor,
     rpcEndpoints: parseRpcEndpoints(environment.JBM_RPC_ENDPOINTS),
+    manifest: parseManifestConfig(
+      environment.JBM_DEPLOYMENT_MANIFEST_PATH,
+      environment.JBM_MANIFEST_SIGNER_PUBLIC_KEY,
+    ),
   });
 }
 
@@ -136,6 +144,15 @@ function parseRpcEndpoints(
     endpoints[chainId] = Object.freeze(providers);
   }
   return Object.freeze(endpoints);
+}
+
+function parseManifestConfig(
+  path: string | undefined,
+  signerPublicKey: string | undefined,
+): { readonly path: string; readonly signerPublicKey: Buffer } | null {
+  const decoded = decodeSecret(signerPublicKey);
+  if (!path || !decoded) return null;
+  return Object.freeze({ path, signerPublicKey: decoded });
 }
 
 function decodeSecret(value: string | undefined): Buffer | null {

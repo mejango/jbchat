@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
-import { createHash, createPrivateKey, sign as signNode } from "node:crypto";
+import { createHash, createPrivateKey, randomUUID, sign as signNode } from "node:crypto";
+import { readFileSync } from "node:fs";
 import postgres, { type Sql } from "postgres";
 import {
   createEnrollmentStore,
@@ -18,6 +19,17 @@ import {
   type RatifiedChainProfile,
 } from "../chain/quorumWalletProofVerifier";
 import finalityProfileSet from "../../../config/finality-profiles.v1.json";
+import {
+  createEligibilityStore,
+  type EligibilityStore,
+} from "../entitlement/eligibilityStore";
+import {
+  parseSignedDeploymentManifest,
+  type DeploymentManifest,
+} from "../entitlement/deploymentManifest";
+import { createQuorumCanonicalPurchaseVerifier } from "../chain/purchaseVerifier";
+import type { ChainTransportRegistry } from "../chain/finalityVerifier";
+import type { FinalityPolicy } from "../authority/finality";
 import {
   createMembershipIntentStore,
   type MembershipIntentStore,
@@ -67,6 +79,7 @@ export interface MessagingHttpContext {
   readonly credentialSigner?: DeviceCredentialSignerPort;
   readonly logSigner?: ExternalProposalSigningPort;
   readonly replayGuard?: DpopReplayGuard;
+  readonly chainRegistry?: ChainTransportRegistry;
 }
 
 export interface MessagingHttpHandlers {
@@ -103,6 +116,7 @@ export interface MessagingHttpHandlers {
     request: Request,
     conversationId: string,
   ) => Promise<Response>;
+  readonly createPurchaseClaim: (request: Request) => Promise<Response>;
 }
 
 interface AuthenticatedSession {
@@ -150,6 +164,10 @@ export function createMessagingHttpHandlers(
     > | null;
     readonly cursorKeyId: string | null;
     readonly pageReader: ReturnType<typeof createConversationPageReader>;
+    readonly eligibility: {
+      readonly storeFor: (chainNumber: number) => EligibilityStore | null;
+      readonly manifestId: string;
+    } | null;
   }
   let cached: Wired | null = null;
 
@@ -204,6 +222,13 @@ export function createMessagingHttpHandlers(
         : null,
       cursorKeyId: config.cursor?.keyId ?? null,
       pageReader: createConversationPageReader({ sql }),
+      eligibility: buildEligibilityLane(
+        config,
+        sql,
+        crypto,
+        contextValue.chainRegistry ?? registryFromEndpoints(config.rpcEndpoints),
+        now,
+      ),
     };
     return cached;
   };
@@ -646,6 +671,92 @@ export function createMessagingHttpHandlers(
         nextCursor: nextCursor.encodedCursor,
       });
     },
+
+    async createPurchaseClaim(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const record = body as Record<string, unknown>;
+      if (
+        !UUID_PATTERN.test(String(record.projectRefId)) ||
+        typeof record.walletRef !== "string" ||
+        typeof record.transactionHash !== "string" ||
+        !/^0x[0-9a-f]{64}$/.test(record.transactionHash) ||
+        typeof record.payLogIndex !== "number" ||
+        !Number.isSafeInteger(record.payLogIndex) ||
+        record.payLogIndex < 0 ||
+        typeof record.terminal !== "string"
+      ) {
+        return problem(400, "malformed_request");
+      }
+      const projectRefId = String(record.projectRefId);
+
+      const projects = await wired.sql`
+        SELECT chain_id, projects_contract, project_id::text AS project_id
+        FROM project_refs
+        WHERE project_ref_id = ${projectRefId} AND status = 'active'`;
+      if (projects.length !== 1) return problem(404, "project_unknown");
+      const chainMatch = String(projects[0].chain_id).match(/^eip155:(\d+)$/);
+      if (!chainMatch) return problem(404, "project_unknown");
+      const chainNumber = Number(chainMatch[1]);
+      if (!wired.eligibility) return notFound();
+      const store = wired.eligibility.storeFor(chainNumber);
+      if (!store) return notFound();
+
+      const policies = await wired.sql`
+        SELECT policy_id, policy_revision::int AS policy_revision, policy_hash
+        FROM policies
+        WHERE project_ref_id = ${projectRefId} AND superseded_at IS NULL
+        ORDER BY policy_revision DESC LIMIT 1`;
+      if (policies.length !== 1) return problem(404, "project_unknown");
+
+      const walletParts = String(record.walletRef).split(":");
+      const walletAddress = walletParts[2]?.toLowerCase() ?? "";
+      const claim = {
+        kind: "juicebox-v6-payment-beneficiary-claim.v1",
+        claimId: randomUUID(),
+        project: {
+          protocol: "juicebox-v6",
+          chainId: chainNumber,
+          projectId: Number(String(projects[0].project_id)),
+          version: 6,
+          deploymentManifestId: wired.eligibility.manifestId,
+          projectsContract: `0x${Buffer.from(
+            projects[0].projects_contract as Uint8Array,
+          ).toString("hex")}`,
+        },
+        transactionHash: String(record.transactionHash),
+        payLogIndex: record.payLogIndex,
+        expectedBeneficiary: walletAddress,
+        customerSubjectSource: "pay-beneficiary",
+      };
+      const issued = await store.issuePurchaseGrant({
+        projectRefId,
+        installationId: session.installationId,
+        walletRef: record.walletRef,
+        policyId: String(policies[0].policy_id),
+        policyRevision: Number(policies[0].policy_revision),
+        policyHash: `0x${Buffer.from(
+          policies[0].policy_hash as Uint8Array,
+        ).toString("hex")}`,
+        claim,
+        terminal: String(record.terminal).toLowerCase(),
+        tierHook: null,
+      });
+      if (issued.status === "issued") {
+        return jsonNoStore(201, issued);
+      }
+      if (issued.status === "pending-finality") {
+        return problem(409, issued.reasonCode);
+      }
+      if (issued.status === "unavailable") {
+        return problem(503, issued.reasonCode);
+      }
+      return problem(issued.status === "ineligible" ? 403 : 400, issued.reasonCode);
+    },
   });
 }
 
@@ -655,6 +766,96 @@ export function createMessagingHttpHandlers(
  * endpoints, or a chain without a ratified profile, stays fail-closed
  * unavailable - never a partial or inferred configuration.
  */
+/**
+ * The eligibility lane exists only when a signed deployment manifest
+ * verifies against its trusted signer AND chain transports exist. Per
+ * chain, the finality policy is derived from the ratified ADR 0005
+ * profile; a chain without a ratified profile has no store and refuses.
+ */
+function buildEligibilityLane(
+  config: Extract<MessagingRuntimeConfig, { status: "configured" }>,
+  sql: Sql,
+  crypto: IdentityKeyedCryptoPort,
+  registry: ChainTransportRegistry | null,
+  now: () => string,
+): {
+  readonly storeFor: (chainNumber: number) => EligibilityStore | null;
+  readonly manifestId: string;
+} | null {
+  if (!config.manifest || !registry) return null;
+  let manifest: DeploymentManifest;
+  try {
+    manifest = parseSignedDeploymentManifest(
+      JSON.parse(readFileSync(config.manifest.path, "utf8")),
+      config.manifest.signerPublicKey,
+    );
+  } catch {
+    return null;
+  }
+  const verifier = createQuorumCanonicalPurchaseVerifier(registry);
+  const stores = new Map<number, EligibilityStore | null>();
+  const storeFor = (chainNumber: number) => {
+    if (stores.has(chainNumber)) return stores.get(chainNumber) ?? null;
+    const ratified = finalityProfileSet.profiles.find(
+      (profile) => profile.chainId === `eip155:${chainNumber}`,
+    );
+    const pinned = manifest.chains.some(
+      (chain) => chain.chainId === chainNumber,
+    );
+    if (!ratified || !pinned) {
+      stores.set(chainNumber, null);
+      return null;
+    }
+    const store = createEligibilityStore({
+      sql,
+      now,
+      crypto,
+      purchaseVerifier: verifier,
+      finalityPolicy: {
+        kind: "juicebox-finality-policy.v1",
+        policyId: ratified.finalityProfileId,
+        chainId: chainNumber,
+        blockTag: "finalized",
+        minimumProviderQuorum: 2,
+        requireBlockHashAgreement: true,
+        requireArchiveStateAtReceiptBlock: true,
+        allowConfirmationFallback: false,
+        safeHeadUse: "suspend-existing-authority-only",
+        onReorg: "revoke-leases-and-rekey",
+      } as unknown as FinalityPolicy,
+      manifest,
+    });
+    stores.set(chainNumber, store);
+    return store;
+  };
+  return Object.freeze({ storeFor, manifestId: manifest.manifestId });
+}
+
+function registryFromEndpoints(
+  rpcEndpoints: Readonly<
+    Record<string, readonly { providerId: string; url: string }[]>
+  > | null,
+): ChainTransportRegistry | null {
+  if (!rpcEndpoints) return null;
+  const cache = new Map<number, readonly ReturnType<typeof createHttpJsonRpcTransport>[]>();
+  return {
+    transportsFor(chainNumber: number) {
+      const existing = cache.get(chainNumber);
+      if (existing) return existing;
+      const endpoints = rpcEndpoints[`eip155:${chainNumber}`];
+      if (!endpoints) return null;
+      const transports = endpoints.map((endpoint) =>
+        createHttpJsonRpcTransport({
+          providerId: endpoint.providerId,
+          url: endpoint.url,
+        }),
+      );
+      cache.set(chainNumber, transports);
+      return transports;
+    },
+  };
+}
+
 function walletVerifierFromEndpoints(
   rpcEndpoints: Readonly<
     Record<string, readonly { providerId: string; url: string }[]>

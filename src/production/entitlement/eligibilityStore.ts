@@ -368,41 +368,60 @@ export function createEligibilityStore(
     },
 
     async suspendGrantsForFinalityLoss(chainId: string): Promise<number> {
-      const now = nowIso();
-      const rows = await sql`
-        UPDATE eligibility_grants
-        SET state = 'suspended', finality_status = 'unavailable',
-            suspended_at = ${now}::timestamptz
-        WHERE source_chain_id = ${chainId} AND state = 'active'
-        RETURNING grant_id`;
-      return rows.length;
+      return suspendGrantsForFinalityLoss(sql, chainId, nowIso());
     },
 
     async revokeGrantsForOrphanedAnchor(
       chainId: string,
       blockHash: string,
     ): Promise<number> {
-      const now = nowIso();
-      const rows = await sql`
-        UPDATE eligibility_grants
-        SET state = 'revoked', finality_status = 'orphaned',
-            revoked_at = ${now}::timestamptz
-        WHERE source_chain_id = ${chainId}
-          AND source_block_hash = ${hashBytes(blockHash)}
-          AND state IN ('active', 'suspended')
-        RETURNING grant_id`;
-      return rows.length;
+      return revokeGrantsForOrphanedAnchor(sql, chainId, blockHash, nowIso());
     },
 
     async sweepExpiredGrants(): Promise<number> {
-      const now = nowIso();
-      const rows = await sql`
-        UPDATE eligibility_grants SET state = 'expired'
-        WHERE state = 'active' AND valid_until <= ${now}::timestamptz
-        RETURNING grant_id`;
-      return rows.length;
+      return sweepExpiredGrants(sql, nowIso());
     },
   });
+}
+
+/** Standalone grant-lifecycle transitions shared with the recheck keeper. */
+export async function suspendGrantsForFinalityLoss(
+  sql: Sql,
+  chainId: string,
+  now: string,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE eligibility_grants
+    SET state = 'suspended', finality_status = 'unavailable',
+        suspended_at = ${now}::timestamptz
+    WHERE source_chain_id = ${chainId} AND state = 'active'
+    RETURNING grant_id`;
+  return rows.length;
+}
+
+export async function revokeGrantsForOrphanedAnchor(
+  sql: Sql,
+  chainId: string,
+  blockHash: string,
+  now: string,
+): Promise<number> {
+  const rows = await sql`
+    UPDATE eligibility_grants
+    SET state = 'revoked', finality_status = 'orphaned',
+        revoked_at = ${now}::timestamptz
+    WHERE source_chain_id = ${chainId}
+      AND source_block_hash = ${hashBytes(blockHash)}
+      AND state IN ('active', 'suspended')
+    RETURNING grant_id`;
+  return rows.length;
+}
+
+export async function sweepExpiredGrants(sql: Sql, now: string): Promise<number> {
+  const rows = await sql`
+    UPDATE eligibility_grants SET state = 'expired'
+    WHERE state = 'active' AND valid_until <= ${now}::timestamptz
+    RETURNING grant_id`;
+  return rows.length;
 }
 
 function expectExactRecord(
