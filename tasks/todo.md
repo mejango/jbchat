@@ -273,10 +273,22 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       idempotent passes); delivery submitter PUBLIC key registered in
       the witness DB. Keeper start command set per-service via GraphQL
       (railway.json carries no startCommand on purpose).
-- [ ] Then: push notifications; KeyPackage publication + conversation
-      planning routes; append route (release-pinned verifier adapters,
-      spec-mandated unconfigured); custom domains; GitHub auto-deploys
-      after push.
+- [x] Push wakeups (keeper child, payload-free VAPID webpush) +
+      KeyPackage publication + planning/activation routes + staff
+      registration by on-chain ownership: all lab-proven and deployed.
+- [x] PRODUCTION FRONTEND replaces the prototype: juicebox.money-family
+      UI (ported tokens/fonts), wallet stack = injected + Coinbase +
+      WalletConnect + Para (env-gated key), real enrollment ceremony
+      (WebCrypto P-256 + Ed25519, SIWE, quorum-verified), DPoP sessions,
+      purchase claiming, real inbox + transcript views, View-as toggle +
+      /account/[address]. Prototype demo moved to src/shared, /shared +
+      /projects 404 in production. Build on webpack with JBM's alias
+      set. LIVE at app-production-bbdd.up.railway.app.
+- [ ] Then: browser/native MLS core (unblocks real conversation
+      activation from the UI + message send); per-sender custody fence
+      refactor (staff replies); append route verifier adapters; witness
+      aging for provisioning; custom domains; push subscribe UI; GitHub
+      auto-deploys after push.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,

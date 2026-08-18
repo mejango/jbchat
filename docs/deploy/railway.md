@@ -36,8 +36,15 @@ Operational facts learned during the first deploy:
   is registered in the witness database as submitter
   `jbm-delivery-log-2026q3`; receipts land in log_witness_receipts
   automatically once conversations append.
-- Remaining manual: custom domains, and connecting GitHub auto-deploys
-  AFTER the owner pushes local main.
+- Remaining manual: custom domains, connecting GitHub auto-deploys AFTER
+  the owner pushes local main, and NEXT_PUBLIC_PARA_API_KEY (Para is
+  wired and hidden until a real key lands; the WalletConnect project ID
+  is set). NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID and
+  JBM_PROVISIONING_SEED are live on the app service; the keeper carries
+  JBM_VAPID_PRIVATE_KEY/SUBJECT + JBM_IDENTITY_SECRET for push wakeups.
+- If deploys die repeatedly at "scheduling build on Metal builder", the
+  assigned regional builder is stuck: move the service's region
+  (GraphQL serviceInstanceUpdate multiRegionConfig) and redeploy.
 
 
 Two Railway PROJECTS from this one repository — separation is the point,
