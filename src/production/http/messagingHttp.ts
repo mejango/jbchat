@@ -785,8 +785,12 @@ function buildEligibilityLane(
   if (!config.manifest || !registry) return null;
   let manifest: DeploymentManifest;
   try {
+    const raw =
+      config.manifest.source.kind === "path"
+        ? readFileSync(config.manifest.source.path, "utf8")
+        : config.manifest.source.json;
     manifest = parseSignedDeploymentManifest(
-      JSON.parse(readFileSync(config.manifest.path, "utf8")),
+      JSON.parse(raw),
       config.manifest.signerPublicKey,
     );
   } catch {

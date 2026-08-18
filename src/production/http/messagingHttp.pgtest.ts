@@ -778,7 +778,7 @@ describeStorage("messaging HTTP surface", () => {
         cursor: { keyId: "lab-http-cursor", key: Buffer.alloc(32, 0x61) },
         rpcEndpoints: null,
         manifest: {
-          path: manifestPath,
+          source: { kind: "path", path: manifestPath },
           signerPublicKey: Buffer.from(signerPublic, "base64url"),
         },
       }),

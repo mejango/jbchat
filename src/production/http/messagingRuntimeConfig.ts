@@ -29,7 +29,9 @@ export type MessagingRuntimeConfig =
         Record<string, readonly RpcEndpointConfig[]>
       > | null;
       readonly manifest: {
-        readonly path: string;
+        readonly source:
+          | { readonly kind: "path"; readonly path: string }
+          | { readonly kind: "inline"; readonly json: string };
         readonly signerPublicKey: Buffer;
       } | null;
     }
@@ -95,6 +97,7 @@ export function loadMessagingRuntimeConfig(
     rpcEndpoints: parseRpcEndpoints(environment.JBM_RPC_ENDPOINTS),
     manifest: parseManifestConfig(
       environment.JBM_DEPLOYMENT_MANIFEST_PATH,
+      environment.JBM_DEPLOYMENT_MANIFEST,
       environment.JBM_MANIFEST_SIGNER_PUBLIC_KEY,
     ),
   });
@@ -148,11 +151,31 @@ function parseRpcEndpoints(
 
 function parseManifestConfig(
   path: string | undefined,
+  inlineJson: string | undefined,
   signerPublicKey: string | undefined,
-): { readonly path: string; readonly signerPublicKey: Buffer } | null {
+):
+  | {
+      readonly source:
+        | { readonly kind: "path"; readonly path: string }
+        | { readonly kind: "inline"; readonly json: string };
+      readonly signerPublicKey: Buffer;
+    }
+  | null {
   const decoded = decodeSecret(signerPublicKey);
-  if (!path || !decoded) return null;
-  return Object.freeze({ path, signerPublicKey: decoded });
+  if (!decoded) return null;
+  if (path) {
+    return Object.freeze({
+      source: Object.freeze({ kind: "path" as const, path }),
+      signerPublicKey: decoded,
+    });
+  }
+  if (inlineJson) {
+    return Object.freeze({
+      source: Object.freeze({ kind: "inline" as const, json: inlineJson }),
+      signerPublicKey: decoded,
+    });
+  }
+  return null;
 }
 
 function decodeSecret(value: string | undefined): Buffer | null {
