@@ -194,7 +194,25 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       anchor replay byte-identical, typed history-gone on purged
       projections.
 
-NOT codeable here (unchanged): the independent policy log/witness service,
+## Production build-out (post-decisions, 2026-08-18)
+- [x] CI workflow (8b5496b): all four gates on every push.
+- [x] ADR 0001 (276321a): ENG-001 closed, v1 profile frozen.
+- [x] ADR 0002 + witness (3246179, c5f17bb, HTTP unit): RFC 6962 witness
+      core over its own database + migrations, cosigning with submitter
+      verification and typed equivocation, verifiable inclusion/
+      consistency proofs, gossip split-view detection; witness HTTP
+      routes active only on the witness deployment (env-gated fail-closed
+      404 elsewhere); Railway runbook at docs/deploy/railway.md with the
+      overlap-based transfer procedure. Self-operation satisfies the G2
+      design gate only — G3 still requires the independent operator.
+- [ ] NEXT: membership-change service flow (add/remove/replace intents →
+      KeyPackage take → external proposal → MLS Commit) wiring the Rust
+      core behind the provider-neutral trait.
+- [ ] Then: enrollment/eligibility/append/pages HTTP routes; RPC finality
+      + purchase adapters over ratified profiles; push notifications.
+
+NOT codeable here (unchanged): succinct coalesced range proofs beyond the
+witness's consistency proofs, the independent OPERATION of the witness,
 succinct coalesced range proofs, the five release-pinned verifier adapters
 and production sync route (spec-mandated unconfigured), real KMS custody,
 chain adapters/ratified finality profiles, XMTP execution (5b), and every
