@@ -125,6 +125,13 @@ do not exist for Candidate A either.
       reopening conditions are in the ADR.
 
 ## Production decisions (owner, 2026-08-18)
+- Launch chains: ALL EIGHT pinned chain IDs — purchases happen on every
+  v6 chain (mainnet, OP, Base, Arbitrum One + their four testnets), so
+  eligibility must cover all of them from launch. That means eight
+  ratified finality profiles in three semantic families (L1 finalized;
+  OP-stack derived-from-finalized-L1 for OP/Base; Arbitrum assertion
+  semantics), one provider pair covering all eight endpoints, and the
+  orphan-response drill run once per family.
 - Witness operating model: self-operated at first in a SEPARATE Railway
   project with its own access boundary and audit stream, transfer-ready
   (state export + key handover documented); independent operator still
