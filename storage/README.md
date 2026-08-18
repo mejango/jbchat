@@ -26,6 +26,26 @@ into real, checksummed, monotonically numbered PostgreSQL migrations.
 - `migrations/0008_membership_purpose_role_matrix.sql` makes delivery purpose
   immutable and enforces the purpose-to-role membership matrix, including
   read-only `subscriber`.
+- `migrations/0009_application_append_state.sql` adds the durable
+  application-append lane state: monotonic fence-lane generations, the
+  interim authority custody row, invisible pending intents (exactly one per
+  lane), realm-scoped acceptances bound to the finalized envelope row, HTTP
+  idempotency scopes, and immutable retirement tombstones.
+
+## PostgreSQL repository
+
+`src/production/storage/postgresDeliveryStore.ts` implements the
+`applicationAppendPreflight` and `atomicPersistence` ports against this
+schema with the `postgres` driver: every canonical document is re-parsed and
+digest-verified on read, lanes serialize on the locked authority row, and a
+finalize commits the envelope, mailbox fanout, usage, outbox event,
+acceptance, and idempotency rows in one transaction. The storage lab runs the
+real delivery service against it (`src/production/storage/*.pgtest.ts`),
+covering accept, HTTP/envelope replay across process boundaries, idempotency
+conflict, concurrent distinct appends, and expired-pending retirement with
+fenced position reuse. Attachments are not supported by this adapter yet and
+fail closed; the authority custody row is an explicit interim stand-in for
+the full relational authority graph.
 
 `npm run storage:migrate` applies pending migrations to the exact database in
 `JBM_STORAGE_DATABASE_URL`; it never infers a target, refuses checksum drift,

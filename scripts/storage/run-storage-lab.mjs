@@ -100,7 +100,7 @@ INSERT INTO archived_release_profiles (
 INSERT INTO delivery_log_signing_keys (
   key_id, public_key, state, valid_from, valid_until, created_at
 ) VALUES (
-  'fictional-delivery-lab-2026q3', ${HEX32("81")}, 'active',
+  'fictional-storage-probe-2026q3', ${HEX32("81")}, 'active',
   now() - interval '1 day', now() + interval '30 days', now()
 );
 INSERT INTO installations (
@@ -163,7 +163,7 @@ function envelopeInsert({
   transcripts = "NULL, NULL",
   signature = "decode(repeat('99', 64), 'hex')",
   receivedAt = "date_trunc('milliseconds', now())",
-  signingKeyId = "fictional-delivery-lab-2026q3",
+  signingKeyId = "fictional-storage-probe-2026q3",
 }) {
   return `
 INSERT INTO envelopes (
@@ -570,6 +570,22 @@ async function main() {
 
     await proveConcurrentPositionFencing(databaseUrl);
     await proveConcurrentMigrationRunners(port);
+
+    console.error("Running the PostgreSQL repository suite...");
+    const repositorySuite = run(
+      "npx",
+      ["vitest", "run", "--config", "vitest.storage.config.ts"],
+      {
+        env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
+        stdio: ["ignore", "inherit", "inherit"],
+        encoding: undefined,
+      },
+    );
+    assert.equal(
+      repositorySuite.status,
+      0,
+      "the PostgreSQL repository suite must pass",
+    );
 
     console.error("Storage lab passed. This is lab evidence only; G2 remains open.");
   } finally {

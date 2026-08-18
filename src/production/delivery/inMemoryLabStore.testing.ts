@@ -1,10 +1,19 @@
 import { Buffer } from "node:buffer";
 import {
-  createPrivateKey,
-  createPublicKey,
-  sign as signEd25519,
-  verify as verifyEd25519,
-} from "node:crypto";
+  buildFanoutEvidence,
+  commandTrustMatchesSnapshot,
+  convertQuotaCapacity,
+  httpIdempotencyScopeKey as httpIdempotencyScope,
+  semanticEnvelopeKeyOf as semanticEnvelopeKey,
+  signerFenceExpectationFor,
+} from "./appendPersistence";
+import {
+  createFictionalDeliveryCryptoPorts,
+  parsePolicyEvidenceForSnapshot,
+  verifyFictionalDeliveryLabReceiptSignatureForTesting,
+  type DeliveryLabSignerHistoryEntry,
+  type FictionalDeliveryCryptoPorts,
+} from "./fictionalCryptoPorts.testing";
 import {
   applicationEnvelopeSemanticallyEqual,
   enforceApplicationAppendDeliveryLimits,
@@ -14,27 +23,19 @@ import {
   type StoredApplicationEnvelope,
 } from "./envelopes";
 import {
-  computeDeliveryLogCheckpointDigest,
   computeEnvelopeLeafHash,
-  computeEnvelopeSha256,
   computeLogHeadHash,
   canonicalLengthPrefixed,
   sha256Bytes,
 } from "./hashes";
 import { classifyHttpIdempotencyCommitment } from "./idempotency";
 import {
-  computeApplicationAppendFenceTokenHash,
-  computeApplicationAppendSignerFenceRecordDigest,
-  computeApplicationAppendSignerFenceVerificationEvidenceDigest,
   parseApplicationAppendReservationFence,
   parseApplicationAppendSignerFenceResolution,
   parseApplicationAppendSignerFenceVerificationEvidence,
   parseDurableApplicationAppendSignerFenceSignedResolution,
   type ApplicationAppendReservationFence,
-  type ApplicationAppendSignerFenceEvidenceVerificationRequest,
   type ApplicationAppendSignerFenceResolution,
-  type ApplicationAppendSignerFenceResolutionExpectation,
-  type ApplicationAppendSignerFenceResolutionRequest,
   type ApplicationAppendSignerFenceVerificationEvidence,
   type AtomicApplicationAppendCommand,
   type AtomicApplicationAppendReservation,
@@ -43,8 +44,6 @@ import {
   type DeliveryCheckpointSigningRequest,
   type DeliveryInvocationContext,
   type FinalizeApplicationAppendInput,
-  type MlsWireInspectionRequest,
-  type PolicyHeadProofVerificationRequest,
   type PrepareUnsignedApplicationAppend,
   type ProductionDeliveryPorts,
   type RetireExpiredApplicationAppendInput,
@@ -52,8 +51,6 @@ import {
 import {
   acceptedApplicationAppendIntentFromPending,
   computeAtomicApplicationAppendCommandDigest,
-  computeMlsApplicationWireInspectionEvidenceDigest,
-  parseApplicationEnvelopeReceipt,
   parseAtomicApplicationAppendCommand,
   parseMlsApplicationWireInspectionEvidence,
   parsePendingApplicationAppendIntent,
@@ -64,40 +61,27 @@ import {
   type PendingApplicationAppendIntent,
 } from "./service";
 import {
-  computeApplicationAppendFanoutEvidenceDigest,
-  computeApplicationAppendMailboxProjectionDigest,
   computeApplicationAppendMlsRosterHash,
-  computeApplicationAppendOutboxProjectionDigest,
   computeApplicationAppendRecipientSetHash,
   computeLockedApplicationAppendSnapshotDigest,
-  computePolicyHeadProofEvidenceDigest,
-  parseApplicationAppendFanoutEvidence,
   parseApplicationAppendFanoutPlan,
   parseApplicationAppendMlsRosterProjections,
   parseApplicationAppendRecipientProjections,
   parseLockedApplicationAppendSnapshot,
-  parsePolicyHeadProofEvidence,
   refreshLockedApplicationAppendAuthorizationSnapshot,
-  validateLockedApplicationAppendQuotaFinalizationTransition,
-  validateLockedApplicationAppendQuotaReleaseTransition,
   type ApplicationAppendFanoutEvidence,
   type ApplicationAppendFanoutPlan,
   type ApplicationAppendMlsRosterProjection,
-  type ApplicationAppendQuotaCapacityReservation,
   type ApplicationAppendRecipientProjection,
   type LockedApplicationAppendSnapshot,
   type LockedConversationUsage,
-  type LockedQuotaCounter,
-  type PolicyHeadProofEvidence,
 } from "./state";
 import {
-  computeDeliveryCheckpointSignatureEvidenceDigest,
-  parseDeliveryRealmId,
   parseDeliveryCheckpointSignatureEvidence,
+  parseDeliveryRealmId,
   type DeliveryCheckpointSignatureEvidence,
 } from "./sync";
 import {
-  MLS_PRIVATE_MESSAGE_MEDIA_TYPE,
   ZERO_HASH32,
   expectExactRecord,
   parseAccountId,
@@ -123,32 +107,16 @@ import {
   type Uint63String,
 } from "./valueObjects";
 
+export {
+  FICTIONAL_DELIVERY_LAB_ED25519_PUBLIC_KEY_SPKI_BASE64URL,
+  verifyFictionalDeliveryLabReceiptSignatureForTesting,
+  type DeliveryLabSignerHistoryEntry,
+} from "./fictionalCryptoPorts.testing";
+
 const HTTP_IDEMPOTENCY_TTL_MILLISECONDS = 7 * 24 * 60 * 60 * 1_000;
 const TRANSACTION_DEADLINE_MARGIN_MILLISECONDS = 250;
 const FICTIONAL_FENCE_TOKEN_DOMAIN =
   "jbm-fictional-lab-application-append-fence-token/v1";
-const FICTIONAL_ED25519_PKCS8_PREFIX = Buffer.from(
-  "302e020100300506032b657004220420",
-  "hex",
-);
-const FICTIONAL_ED25519_SEED = Buffer.from(
-  Array.from({ length: 32 }, (_, index) => index + 1),
-);
-const FICTIONAL_DELIVERY_LAB_PRIVATE_KEY = createPrivateKey({
-  key: Buffer.concat([FICTIONAL_ED25519_PKCS8_PREFIX, FICTIONAL_ED25519_SEED]),
-  format: "der",
-  type: "pkcs8",
-});
-const FICTIONAL_DELIVERY_LAB_PUBLIC_KEY = createPublicKey(
-  FICTIONAL_DELIVERY_LAB_PRIVATE_KEY,
-);
-
-/** Paired only with the deterministic private key in this testing module. */
-export const FICTIONAL_DELIVERY_LAB_ED25519_PUBLIC_KEY_SPKI_BASE64URL =
-  FICTIONAL_DELIVERY_LAB_PUBLIC_KEY.export({
-    format: "der",
-    type: "spki",
-  }).toString("base64url");
 
 export const DELIVERY_LAB_FAILPOINTS = [
   "before-reservation-prepare",
@@ -220,14 +188,6 @@ export interface DeliveryLabConversationSyncPage {
   readonly hasMore: boolean;
 }
 
-export interface DeliveryLabSignerHistoryEntry {
-  readonly conversationId: ConversationId;
-  readonly position: Uint63String;
-  readonly checkpointDigest: Hash32;
-  readonly signature: Ed25519Signature;
-  readonly callCount: number;
-}
-
 export interface DeliveryLabInspection {
   readonly basePosition: Uint63String;
   readonly baseHeadHash: Hash32;
@@ -269,11 +229,6 @@ interface HttpIdempotencyRecord {
   readonly requestCommitment: Hash32;
   readonly acceptance: StoredAcceptance;
   readonly expiresAtMilliseconds: number;
-}
-
-interface SignerFenceRecord {
-  readonly resolution: ApplicationAppendSignerFenceResolution;
-  callCount: number;
 }
 
 interface LabDatabase {
@@ -325,7 +280,7 @@ export class InMemoryDeliveryLabStore
   private readonly signingKeyValidUntil: Rfc3339Millis;
   private readonly recipientProjections: readonly ApplicationAppendRecipientProjection[];
   private readonly mlsRosterProjections: readonly ApplicationAppendMlsRosterProjection[];
-  private readonly signerFences = new Map<string, SignerFenceRecord[]>();
+  private readonly cryptoPorts: FictionalDeliveryCryptoPorts;
   private readonly retiredIntents = new Map<Hash32, Rfc3339Millis>();
   private laneGeneration = 0n;
   private failpoint: DeliveryLabFailpoint | null = null;
@@ -374,41 +329,37 @@ export class InMemoryDeliveryLabStore
       ),
     };
 
-    this.productionPorts = Object.freeze({
-      mlsWireInspector: {
-        inspect: (request: MlsWireInspectionRequest) =>
-          this.inspectMlsWire(request),
+    this.cryptoPorts = createFictionalDeliveryCryptoPorts({
+      now: () => this.nowValue,
+      snapshot: () => this.database.snapshot,
+      signingKeyId: seed.signingKeyId,
+      signingKeyValidFrom: seed.signingKeyValidFrom,
+      signingKeyValidUntil: seed.signingKeyValidUntil,
+      hooks: {
+        beforeSignerCall: () => this.maybeFail("before-signer-call"),
+        afterSignerCall: () => this.maybeFail("after-signer-call"),
+        beforeSignatureVerifierCall: () =>
+          this.maybeFail("before-signature-verifier-call"),
+        afterSignatureVerifierCall: () =>
+          this.maybeFail("after-signature-verifier-call"),
       },
+    });
+    this.productionPorts = Object.freeze({
+      mlsWireInspector: this.cryptoPorts.mlsWireInspector,
       mlsCommitProjectionVerifier: {
         verify: () => Promise.resolve(unavailable()),
       },
       mlsExternalProposalVerifier: {
         verify: () => Promise.resolve(unavailable()),
       },
-      policyHeadProofVerifier: {
-        verify: (request: PolicyHeadProofVerificationRequest) =>
-          this.verifyPolicyHead(request),
-      },
+      policyHeadProofVerifier: this.cryptoPorts.policyHeadProofVerifier,
       conversationPolicyReplayVerifier: {
         // Private lab mailbox sync below does not call production sync.
         verify: () => Promise.resolve(unavailable()),
       },
-      checkpointSigner: {
-        signExact: (request: DeliveryCheckpointSigningRequest) =>
-          this.signExactForLab(request),
-        resolveOrCancelIfUnsigned: (
-          request: ApplicationAppendSignerFenceResolutionRequest,
-        ) => this.resolveOrCancelForLab(request),
-      },
-      signerFenceEvidenceVerifier: {
-        verify: (
-          request: ApplicationAppendSignerFenceEvidenceVerificationRequest,
-        ) => this.verifySignerFenceEvidence(request),
-      },
-      checkpointSignatureVerifier: {
-        verify: (request: DeliveryCheckpointSignatureVerificationRequest) =>
-          this.verifyCheckpointSignature(request),
-      },
+      checkpointSigner: this.cryptoPorts.checkpointSigner,
+      signerFenceEvidenceVerifier: this.cryptoPorts.signerFenceEvidenceVerifier,
+      checkpointSignatureVerifier: this.cryptoPorts.checkpointSignatureVerifier,
       conversationPageProofVerifier: {
         // Private lab mailbox sync below does not call production sync.
         verify: () => Promise.resolve(unavailable()),
@@ -470,31 +421,7 @@ export class InMemoryDeliveryLabStore
       boundAttachmentCount: [...this.database.attachments.values()].filter(
         ({ state }) => state === "bound",
       ).length,
-      signerHistory: Object.freeze(
-        [...this.signerFences.values()]
-          .flat()
-          .filter(
-            (record): record is SignerFenceRecord & {
-              resolution: ApplicationAppendSignerFenceResolution & {
-                status: "signed";
-              };
-            } => record.resolution.status === "signed",
-          )
-          .sort((left, right) =>
-            `${left.resolution.conversationId} ${left.resolution.position}`.localeCompare(
-              `${right.resolution.conversationId} ${right.resolution.position}`,
-            ),
-          )
-          .map((record) =>
-            Object.freeze({
-              conversationId: record.resolution.conversationId,
-              position: record.resolution.position,
-              checkpointDigest: record.resolution.checkpointDigest,
-              signature: record.resolution.checkpointSignature,
-              callCount: record.callCount,
-            }),
-          ),
-      ),
+      signerHistory: this.cryptoPorts.signerHistoryForTesting(),
     });
   }
 
@@ -935,13 +862,7 @@ export class InMemoryDeliveryLabStore
       }
       if (
         resolution.status !== "cancelled" ||
-        resolution.fenceRecordSigningKeyId !== this.signingKeyId ||
-        !verifyEd25519(
-          null,
-          Buffer.from(resolution.fenceRecordDigest, "base64url"),
-          FICTIONAL_DELIVERY_LAB_PUBLIC_KEY,
-          Buffer.from(resolution.fenceRecordSignature, "base64url"),
-        )
+        resolution.fenceRecordSigningKeyId !== this.signingKeyId
       ) {
         return unavailable("malformed-dependency-response");
       }
@@ -954,13 +875,6 @@ export class InMemoryDeliveryLabStore
           ),
         );
       } catch {
-        return unavailable("malformed-dependency-response");
-      }
-      const records = this.fenceRecordsAt(
-        pending.envelope.conversationId,
-        pending.envelope.position,
-      );
-      if (records.some((record) => record.resolution.status === "signed")) {
         return unavailable("malformed-dependency-response");
       }
       convertQuotaCapacity(pending, "release");
@@ -1129,393 +1043,6 @@ export class InMemoryDeliveryLabStore
       invocationStartedAt: invocation.invocationStartedAt,
       deadline: invocation.deadline,
       signal: invocation.signal,
-    });
-  }
-
-  private fenceRecordsAt(
-    conversationId: ConversationId,
-    position: Uint63String,
-  ): SignerFenceRecord[] {
-    const key = signerFenceKey(conversationId, position);
-    let records = this.signerFences.get(key);
-    if (!records) {
-      records = [];
-      this.signerFences.set(key, records);
-    }
-    return records;
-  }
-
-  private validateSigningTuple(request: {
-    readonly conversationId: ConversationId;
-    readonly position: Uint63String;
-    readonly previousHeadHash: Hash32;
-    readonly headHash: Hash32;
-    readonly signingKeyId: SigningKeyId;
-    readonly checkpointDigest: Hash32;
-  }): boolean {
-    return (
-      request.signingKeyId === this.signingKeyId &&
-      request.checkpointDigest ===
-        computeDeliveryLogCheckpointDigest({
-          conversationId: request.conversationId,
-          position: request.position,
-          previousHeadHash: request.previousHeadHash,
-          headHash: request.headHash,
-          signingKeyId: request.signingKeyId,
-        })
-    );
-  }
-
-  private async signExactForLab(
-    request: DeliveryCheckpointSigningRequest,
-  ): Promise<unknown> {
-    if (!this.invocationIsLive(request)) return unavailable("timeout");
-    this.maybeFail("before-signer-call");
-    if (
-      request.profile !== "delivery-log-checkpoint.v1" ||
-      !this.validateSigningTuple(request)
-    ) {
-      return unavailable("malformed-dependency-response");
-    }
-    let fence: ApplicationAppendReservationFence;
-    try {
-      fence = parseApplicationAppendReservationFence(request.reservationFence);
-    } catch {
-      return unavailable("malformed-dependency-response");
-    }
-    const fenceTokenHash = computeApplicationAppendFenceTokenHash(fence.token);
-    const records = this.fenceRecordsAt(request.conversationId, request.position);
-    const signedRecord = records.find(
-      (record) => record.resolution.status === "signed",
-    );
-    if (signedRecord) {
-      if (
-        signedRecord.resolution.fenceTokenHash !== fenceTokenHash ||
-        signedRecord.resolution.checkpointDigest !== request.checkpointDigest
-      ) {
-        return unavailable("malformed-dependency-response");
-      }
-      signedRecord.callCount += 1;
-      this.maybeFail("after-signer-call");
-      return signedRecord.resolution;
-    }
-    const own = records.find(
-      (record) => record.resolution.fenceTokenHash === fenceTokenHash,
-    );
-    if (own) {
-      own.callCount += 1;
-      this.maybeFail("after-signer-call");
-      return own.resolution;
-    }
-    if (this.nowValue >= request.pendingExpiresAt) {
-      return unavailable("malformed-dependency-response");
-    }
-    const checkpointSignature = parseEd25519Signature(
-      signEd25519(
-        null,
-        Buffer.from(request.checkpointDigest, "base64url"),
-        FICTIONAL_DELIVERY_LAB_PRIVATE_KEY,
-      ).toString("base64url"),
-    );
-    const signedAt =
-      this.nowValue < request.checkpointReceivedAt
-        ? request.checkpointReceivedAt
-        : this.nowValue;
-    const resolution = this.buildFenceResolution(request, fence, {
-      status: "signed",
-      checkpointSignature,
-      signedAt,
-    });
-    records.push({ resolution, callCount: 1 });
-    this.maybeFail("after-signer-call");
-    return resolution;
-  }
-
-  private async resolveOrCancelForLab(
-    request: ApplicationAppendSignerFenceResolutionRequest,
-  ): Promise<unknown> {
-    if (!this.invocationIsLive(request)) return unavailable("timeout");
-    this.maybeFail("before-signer-call");
-    if (
-      request.profile !== "application-append-signer-fence-resolution.v1" ||
-      !this.validateSigningTuple(request)
-    ) {
-      return unavailable("malformed-dependency-response");
-    }
-    let fence: ApplicationAppendReservationFence;
-    try {
-      fence = parseApplicationAppendReservationFence(request.reservationFence);
-    } catch {
-      return unavailable("malformed-dependency-response");
-    }
-    const fenceTokenHash = computeApplicationAppendFenceTokenHash(fence.token);
-    const records = this.fenceRecordsAt(request.conversationId, request.position);
-    const own = records.find(
-      (record) => record.resolution.fenceTokenHash === fenceTokenHash,
-    );
-    if (own) {
-      own.callCount += 1;
-      this.maybeFail("after-signer-call");
-      return own.resolution;
-    }
-    if (this.nowValue < request.pendingExpiresAt) {
-      return unavailable("malformed-dependency-response");
-    }
-    const resolution = this.buildFenceResolution(request, fence, {
-      status: "cancelled",
-      cancellationStatus: "irreversible-cancelled",
-      cancelledAt: this.nowValue,
-    });
-    records.push({ resolution, callCount: 1 });
-    this.maybeFail("after-signer-call");
-    return resolution;
-  }
-
-  private buildFenceResolution(
-    request: Omit<DeliveryCheckpointSigningRequest, "profile"> & {
-      profile: string;
-    },
-    fence: ApplicationAppendReservationFence,
-    statusPart:
-      | {
-          status: "signed";
-          checkpointSignature: Ed25519Signature;
-          signedAt: Rfc3339Millis;
-        }
-      | {
-          status: "cancelled";
-          cancellationStatus: "irreversible-cancelled";
-          cancelledAt: Rfc3339Millis;
-        },
-  ): ApplicationAppendSignerFenceResolution {
-    const common = {
-      profile: "application-append-signer-fence-resolution.v1" as const,
-      realmId: request.realmId,
-      conversationGeneration: request.conversationGeneration,
-      releaseProfileId: request.releaseProfileId,
-      releaseTrustRootDigest: request.releaseTrustRootDigest,
-      conversationId: request.conversationId,
-      position: request.position,
-      previousHeadHash: request.previousHeadHash,
-      headHash: request.headHash,
-      signingKeyId: request.signingKeyId,
-      checkpointDigest: request.checkpointDigest,
-      checkpointReceivedAt: request.checkpointReceivedAt,
-      pendingIntentDigest: request.pendingIntentDigest,
-      fenceGeneration: fence.generation,
-      fenceTokenHash: computeApplicationAppendFenceTokenHash(fence.token),
-      pendingExpiresAt: request.pendingExpiresAt,
-      admissionStartedAt: request.admissionStartedAt,
-      fenceRecordKeyProfile:
-        "application-append-fence-record-ed25519.v1" as const,
-      fenceRecordSigningKeyId: this.signingKeyId,
-    };
-    const fenceRecordDigest = computeApplicationAppendSignerFenceRecordDigest({
-      ...common,
-      ...statusPart,
-    } as ApplicationAppendSignerFenceResolution);
-    const fenceRecordSignature = parseEd25519Signature(
-      signEd25519(
-        null,
-        Buffer.from(fenceRecordDigest, "base64url"),
-        FICTIONAL_DELIVERY_LAB_PRIVATE_KEY,
-      ).toString("base64url"),
-    );
-    return Object.freeze({
-      ...common,
-      fenceRecordDigest,
-      fenceRecordSignature,
-      ...statusPart,
-    }) as ApplicationAppendSignerFenceResolution;
-  }
-
-  private async verifySignerFenceEvidence(
-    request: ApplicationAppendSignerFenceEvidenceVerificationRequest,
-  ): Promise<unknown> {
-    if (!this.invocationIsLive(request)) return unavailable("timeout");
-    const resolution = request.resolution;
-    try {
-      if (
-        request.profile !== "application-append-signer-fence-evidence.v1" ||
-        resolution.fenceRecordKeyProfile !==
-          "application-append-fence-record-ed25519.v1" ||
-        resolution.fenceRecordSigningKeyId !== this.signingKeyId ||
-        resolution.fenceRecordDigest !==
-          computeApplicationAppendSignerFenceRecordDigest(resolution) ||
-        !verifyEd25519(
-          null,
-          Buffer.from(resolution.fenceRecordDigest, "base64url"),
-          FICTIONAL_DELIVERY_LAB_PUBLIC_KEY,
-          Buffer.from(resolution.fenceRecordSignature, "base64url"),
-        )
-      ) {
-        return unavailable("malformed-dependency-response");
-      }
-    } catch {
-      return unavailable("malformed-dependency-response");
-    }
-    const resolutionStatus =
-      resolution.status === "signed"
-        ? ("signed" as const)
-        : ("irreversible-cancelled" as const);
-    const fenceRecordSignatureSha256 = sha256Bytes(
-      Buffer.from(resolution.fenceRecordSignature, "base64url"),
-    );
-    return Object.freeze({
-      profile: "application-append-signer-fence-evidence.v1",
-      status: "verified",
-      resolutionStatus,
-      pendingIntentDigest: resolution.pendingIntentDigest,
-      fenceGeneration: resolution.fenceGeneration,
-      fenceTokenHash: resolution.fenceTokenHash,
-      fenceRecordKeyProfile: resolution.fenceRecordKeyProfile,
-      fenceRecordDigest: resolution.fenceRecordDigest,
-      fenceRecordSigningKeyId: resolution.fenceRecordSigningKeyId,
-      fenceRecordSignatureSha256,
-      verifiedAt: request.verifiedAt,
-      keyStatus: "trusted-for-record",
-      recordSignatureStatus: "verified",
-      evidenceDigest: computeApplicationAppendSignerFenceVerificationEvidenceDigest({
-        resolution,
-        resolutionStatus,
-        fenceRecordSignatureSha256,
-        verifiedAt: request.verifiedAt,
-      }),
-    });
-  }
-
-  private async inspectMlsWire(
-    request: MlsWireInspectionRequest,
-  ): Promise<unknown> {
-    if (!this.invocationIsLive(request)) return unavailable("timeout");
-    const snapshot = this.database.snapshot;
-    if (
-      request.releaseProfileId !== snapshot.conversation.releaseProfileId ||
-      request.expectedGroupIdHash !== snapshot.conversation.groupIdHash ||
-      request.expectedEpoch !== snapshot.conversation.epoch ||
-      request.contentType !== MLS_PRIVATE_MESSAGE_MEDIA_TYPE ||
-      computeEnvelopeSha256(request.envelopeBytes) !== request.envelopeSha256
-    ) {
-      return unavailable("malformed-dependency-response");
-    }
-    const evidence = {
-      releaseProfileId: request.releaseProfileId,
-      expectedGroupIdHash: request.expectedGroupIdHash,
-      expectedEpoch: request.expectedEpoch,
-      wireKind: request.expectedWireKind,
-      contentType: MLS_PRIVATE_MESSAGE_MEDIA_TYPE,
-      envelopeSha256: request.envelopeSha256,
-      inspectionStatus: "verified" as const,
-    };
-    return Object.freeze({
-      status: "verified",
-      profile: "mls-application-wire-inspection.v1",
-      ...evidence,
-      evidenceDigest:
-        computeMlsApplicationWireInspectionEvidenceDigest(evidence),
-    });
-  }
-
-  private async verifyPolicyHead(
-    request: PolicyHeadProofVerificationRequest,
-  ): Promise<unknown> {
-    if (!this.invocationIsLive(request)) return unavailable("timeout");
-    const snapshot = this.database.snapshot;
-    const policy = snapshot.policyHead;
-    const expected = policyExpectation(snapshot, request.verifiedAt);
-    for (const key of Object.keys(expected) as (keyof typeof expected)[]) {
-      if (request[key] !== expected[key]) {
-        return unavailable("malformed-dependency-response");
-      }
-    }
-    const evidence = {
-      ...expected,
-      signedBodySha256: policy.signedBodySha256,
-      signerKeyId: policy.signerKeyId,
-      signatureSha256: policy.signatureSha256,
-      witnessCheckpointId: policy.witnessCheckpointId!,
-      witnessedPolicyHeadHash: policy.witnessedPolicyHeadHash!,
-      witnessEvidenceDigest: policy.witnessEvidenceDigest,
-      issuedAt: policy.issuedAt,
-      expiresAt: policy.expiresAt,
-      signatureStatus: "verified" as const,
-      keyStatus: "valid-for-checkpoint" as const,
-      witnessStatus: "verified" as const,
-      freshnessStatus: "fresh" as const,
-      currentStatus: "current" as const,
-      policyConsistencyStatus: "verified" as const,
-      sendGrantInclusionStatus: "verified" as const,
-      policyConsistencyEvidenceDigest:
-        policy.policyConsistencyEvidenceDigest,
-    };
-    return Object.freeze({
-      status: "verified",
-      profile: "conversation-policy-head-proof.v1",
-      ...evidence,
-      evidenceDigest: computePolicyHeadProofEvidenceDigest(evidence),
-    });
-  }
-
-  private async verifyCheckpointSignature(
-    request: DeliveryCheckpointSignatureVerificationRequest,
-  ): Promise<unknown> {
-    if (!this.invocationIsLive(request)) return unavailable("timeout");
-    this.maybeFail("before-signature-verifier-call");
-    const snapshot = this.database.snapshot;
-    const valid =
-      request.profile === "delivery-log-checkpoint.v1" &&
-      request.realmId === snapshot.conversation.realmId &&
-      request.conversationGeneration === snapshot.conversation.generation &&
-      request.releaseProfileId === snapshot.conversation.releaseProfileId &&
-      request.releaseTrustRootDigest ===
-        snapshot.conversation.releaseTrustRootDigest &&
-      request.signingKeyId === this.signingKeyId &&
-      request.checkpointDigest ===
-        computeDeliveryLogCheckpointDigest({
-          conversationId: request.conversationId,
-          position: request.position,
-          previousHeadHash: request.previousHeadHash,
-          headHash: request.headHash,
-          signingKeyId: request.signingKeyId,
-        }) &&
-      request.checkpointReceivedAt >= this.signingKeyValidFrom &&
-      request.checkpointReceivedAt < this.signingKeyValidUntil &&
-      request.verifiedAt >= request.checkpointReceivedAt &&
-      verifyEd25519(
-        null,
-        Buffer.from(request.checkpointDigest, "base64url"),
-        FICTIONAL_DELIVERY_LAB_PUBLIC_KEY,
-        Buffer.from(request.signature, "base64url"),
-      );
-    if (!valid) return unavailable("malformed-dependency-response");
-    const signatureSha256 = sha256Bytes(
-      Buffer.from(request.signature, "base64url"),
-    );
-    const evidence = {
-      realmId: request.realmId,
-      conversationId: request.conversationId,
-      conversationGeneration: request.conversationGeneration,
-      releaseProfileId: request.releaseProfileId,
-      releaseTrustRootDigest: request.releaseTrustRootDigest,
-      position: request.position,
-      previousHeadHash: request.previousHeadHash,
-      headHash: request.headHash,
-      signingKeyId: request.signingKeyId,
-      checkpointDigest: request.checkpointDigest,
-      signatureSha256,
-      checkpointReceivedAt: request.checkpointReceivedAt,
-      verifiedAt: request.verifiedAt,
-      keyState: "active" as const,
-      validFrom: this.signingKeyValidFrom,
-      validUntil: this.signingKeyValidUntil,
-    };
-    this.maybeFail("after-signature-verifier-call");
-    return Object.freeze({
-      status: "verified",
-      profile: "delivery-log-checkpoint.v1",
-      ...evidence,
-      evidenceDigest:
-        computeDeliveryCheckpointSignatureEvidenceDigest(evidence),
     });
   }
 
@@ -1819,145 +1346,6 @@ export class InMemoryDeliveryLabStore
   }
 }
 
-function signerFenceExpectationFor(
-  pending: PendingApplicationAppendIntent,
-): ApplicationAppendSignerFenceResolutionExpectation {
-  const envelope = pending.envelope;
-  return Object.freeze({
-    realmId: parseDeliveryRealmId(pending.admissionCommand.realmId),
-    conversationGeneration: pending.priorSnapshot.conversation.generation,
-    releaseProfileId: pending.admissionCommand.releaseProfileId,
-    releaseTrustRootDigest: pending.admissionCommand.releaseTrustRootDigest,
-    conversationId: envelope.conversationId,
-    position: envelope.position,
-    previousHeadHash: envelope.previousHeadHash,
-    headHash: envelope.headHash,
-    signingKeyId: envelope.logSigningKeyId,
-    checkpointDigest: envelope.logCheckpointDigest,
-    checkpointReceivedAt: envelope.receivedAt,
-    pendingIntentDigest: pending.intentDigest,
-    fenceGeneration: pending.reservationFence.generation,
-    fenceTokenHash: computeApplicationAppendFenceTokenHash(
-      pending.reservationFence.token,
-    ),
-    pendingExpiresAt: pending.pendingExpiresAt,
-    admissionStartedAt: pending.admissionStartedAt,
-  });
-}
-
-/**
- * Computes and validates the exact quota-capacity conversion for finalizing
- * or releasing one pending append. The lab keeps reserved capacity inside the
- * pending intent, so the conversion always starts from postReservationQuotas.
- */
-function convertQuotaCapacity(
-  pending: PendingApplicationAppendIntent,
-  mode: "finalize" | "release",
-): readonly LockedQuotaCounter[] {
-  const reservations = pending.commitProjection.quotaCapacityReservations;
-  const preparedFinalQuotas = pending.postReservationQuotas.map((quota) => {
-    const reservation = reservations.find(
-      ({ scope }) => scope === quota.scope,
-    );
-    if (!reservation) {
-      throw new TypeError("Quota reservation scope disappeared in the lab.");
-    }
-    return Object.freeze({
-      ...quota,
-      operationCount:
-        mode === "finalize"
-          ? uint63FromBigInt(
-              BigInt(quota.operationCount) +
-                BigInt(reservation.reservationOperationCount),
-            )
-          : quota.operationCount,
-      byteCount:
-        mode === "finalize"
-          ? uint63FromBigInt(
-              BigInt(quota.byteCount) + BigInt(reservation.reservationByteCount),
-            )
-          : quota.byteCount,
-      reservedOperationCount: uint63FromBigInt(
-        BigInt(quota.reservedOperationCount) -
-          BigInt(reservation.reservationOperationCount),
-      ),
-      reservedByteCount: uint63FromBigInt(
-        BigInt(quota.reservedByteCount) -
-          BigInt(reservation.reservationByteCount),
-      ),
-      rowVersion: uint63FromBigInt(BigInt(quota.rowVersion) + 1n),
-    });
-  });
-  const terminalState = mode === "finalize" ? "consumed" : "released";
-  const preparedFinalReservations: readonly ApplicationAppendQuotaCapacityReservation[] =
-    reservations.map((reservation) =>
-      Object.freeze({ ...reservation, state: terminalState as "consumed" | "released" }),
-    );
-  const input = {
-    currentQuotas: pending.postReservationQuotas,
-    currentCapacityReservations: reservations,
-    pendingPreparationDigest: pending.preparationDigest,
-    fenceGeneration: pending.reservationFence.generation,
-    fenceTokenHash: computeApplicationAppendFenceTokenHash(
-      pending.reservationFence.token,
-    ),
-    preparedFinalQuotas,
-    preparedFinalReservations,
-  };
-  const conversion =
-    mode === "finalize"
-      ? validateLockedApplicationAppendQuotaFinalizationTransition(input)
-      : validateLockedApplicationAppendQuotaReleaseTransition(input);
-  return conversion.quotas;
-}
-
-function buildFanoutEvidence(
-  plan: ApplicationAppendFanoutPlan,
-  envelope: StoredApplicationEnvelope,
-): ApplicationAppendFanoutEvidence {
-  const mailboxProjectionDigest = computeApplicationAppendMailboxProjectionDigest({
-    plan,
-    envelopeId: envelope.envelopeId,
-  });
-  const outboxProjectionDigest = computeApplicationAppendOutboxProjectionDigest({
-    conversationId: envelope.conversationId,
-    envelopeId: envelope.envelopeId,
-    position: envelope.position,
-    headHash: envelope.headHash,
-  });
-  return parseApplicationAppendFanoutEvidence(
-    {
-      profile: "application-append-fanout.v1",
-      status: "committed",
-      conversationId: envelope.conversationId,
-      envelopeId: envelope.envelopeId,
-      position: envelope.position,
-      headHash: envelope.headHash,
-      rosterHash: plan.rosterHash,
-      planDigest: plan.planDigest,
-      recipientCount: plan.recipientCount,
-      mailboxProjectionDigest,
-      outboxProjectionDigest,
-      evidenceDigest: computeApplicationAppendFanoutEvidenceDigest({
-        conversationId: envelope.conversationId,
-        envelopeId: envelope.envelopeId,
-        position: envelope.position,
-        headHash: envelope.headHash,
-        rosterHash: plan.rosterHash,
-        planDigest: plan.planDigest,
-        recipientCount: plan.recipientCount,
-        mailboxProjectionDigest,
-        outboxProjectionDigest,
-      }),
-    },
-    {
-      plan,
-      envelopeId: envelope.envelopeId,
-      headHash: envelope.headHash,
-    },
-  );
-}
-
 function parseLabSeed(value: unknown): ParsedLabSeed {
   const record = expectExactRecord(
     value,
@@ -2112,60 +1500,6 @@ function parseDataArray(value: unknown, label: string): readonly unknown[] {
   return value.map((entry) => entry);
 }
 
-function policyExpectation(
-  snapshot: LockedApplicationAppendSnapshot,
-  verifiedAt: Rfc3339Millis,
-) {
-  const conversation = snapshot.conversation;
-  const policy = snapshot.policyHead;
-  return Object.freeze({
-    realmId: parseDeliveryRealmId(conversation.realmId),
-    conversationGeneration: conversation.generation,
-    releaseTrustRootDigest: conversation.releaseTrustRootDigest,
-    purpose: "append-authorization" as const,
-    releaseProfileId: conversation.releaseProfileId,
-    deliveryLimitsDigest: conversation.deliveryLimitsDigest,
-    conversationId: conversation.conversationId,
-    policyHeadId: policy.policyHeadId,
-    policyHeadSequence: policy.policyHeadSequence,
-    policyHeadHash: policy.policyHeadHash,
-    deliveryLogPosition: policy.deliveryLogPosition,
-    deliveryLogHeadHash: policy.deliveryLogHeadHash,
-    evaluationLogPosition: conversation.lastPosition,
-    evaluationLogHeadHash: conversation.currentLogHeadHash,
-    epoch: policy.epoch,
-    rosterVersion: policy.rosterVersion,
-    confirmedTranscriptHash: policy.confirmedTranscriptHash,
-    policyRevision: policy.policyRevision,
-    mandatoryProposalCount: policy.mandatoryProposalCount,
-    mandatoryProposalSetHash: policy.mandatoryProposalSetHash,
-    authorizedSendGrantSetHash: policy.authorizedSendGrantSetHash,
-    selectedSendGrantEvidenceDigest:
-      policy.selectedSendGrantEvidenceDigest,
-    selectedSendGrantInclusionEvidenceDigest:
-      policy.selectedSendGrantInclusionEvidenceDigest,
-    authorizedQuotaPolicyDigest: policy.authorizedQuotaPolicyDigest,
-    priorPolicyHeadSequence: policy.priorPolicyHeadSequence,
-    priorPolicyHeadHash: policy.priorPolicyHeadHash,
-    priorPolicyWitnessCheckpointId:
-      policy.priorPolicyWitnessCheckpointId,
-    priorPolicyWitnessEvidenceDigest:
-      policy.priorPolicyWitnessEvidenceDigest,
-    verifiedAt,
-  });
-}
-
-function parsePolicyEvidenceForSnapshot(
-  value: unknown,
-  snapshot: LockedApplicationAppendSnapshot,
-): PolicyHeadProofEvidence {
-  const verifiedAt = parseRfc3339Millis(dataValue(value, "verifiedAt"));
-  return parsePolicyHeadProofEvidence(
-    value,
-    policyExpectation(snapshot, verifiedAt),
-  );
-}
-
 function checkpointVerificationRequest(
   envelope: StoredApplicationEnvelope,
   pending: PendingApplicationAppendIntent,
@@ -2191,19 +1525,6 @@ function checkpointVerificationRequest(
     verifiedAt,
     ...invocation,
   });
-}
-
-function commandTrustMatchesSnapshot(
-  command: AtomicApplicationAppendCommand,
-  snapshot: LockedApplicationAppendSnapshot,
-): boolean {
-  const conversation = snapshot.conversation;
-  return (
-    command.realmId === conversation.realmId &&
-    command.releaseProfileId === conversation.releaseProfileId &&
-    command.deliveryLimitsDigest === conversation.deliveryLimitsDigest &&
-    command.releaseTrustRootDigest === conversation.releaseTrustRootDigest
-  );
 }
 
 function rejected(
@@ -2235,34 +1556,6 @@ function unavailable(
     | "malformed-dependency-response" = "not-configured",
 ) {
   return Object.freeze({ status: "unavailable", reasonCode });
-}
-
-function httpIdempotencyScope(command: AtomicApplicationAppendCommand): string {
-  const identity = command.semanticIdentity;
-  return [
-    command.realmId,
-    identity.authenticatedSender.accountId,
-    identity.authenticatedSender.installationId,
-    "POST",
-    "/v1/conversations/{conversationId}/envelopes",
-    identity.conversationId,
-    command.idempotencyKey,
-  ].join(" ");
-}
-
-function semanticEnvelopeKey(
-  realmId: string,
-  conversationId: ConversationId,
-  envelopeId: EnvelopeId,
-): string {
-  return `${realmId} ${conversationId} ${envelopeId}`;
-}
-
-function signerFenceKey(
-  conversationId: ConversationId,
-  position: Uint63String,
-): string {
-  return `${conversationId} ${position}`;
 }
 
 function recipientEligibleAt(
@@ -2359,30 +1652,4 @@ function isThenable(value: unknown): boolean {
 
 function utf8(value: string): Uint8Array {
   return new TextEncoder().encode(value);
-}
-
-export function verifyFictionalDeliveryLabReceiptSignatureForTesting(
-  value: unknown,
-): boolean {
-  try {
-    const receipt = parseApplicationEnvelopeReceipt(value);
-    const digest = computeDeliveryLogCheckpointDigest({
-      conversationId: receipt.conversationId,
-      position: receipt.position,
-      previousHeadHash: receipt.logHead.previousHeadHash,
-      headHash: receipt.logHead.headHash,
-      signingKeyId: receipt.logHead.signingKeyId,
-    });
-    return (
-      digest === receipt.logHead.checkpointDigest &&
-      verifyEd25519(
-        null,
-        Buffer.from(digest, "base64url"),
-        FICTIONAL_DELIVERY_LAB_PUBLIC_KEY,
-        Buffer.from(receipt.logHead.signature, "base64url"),
-      )
-    );
-  } catch {
-    return false;
-  }
 }

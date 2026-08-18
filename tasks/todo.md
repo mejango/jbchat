@@ -36,8 +36,14 @@ codeable item.
       identity, page-end projections, policy-head/quota anchors, scope
       mappings (their shape follows the TS port contract). `postgres`
       (porsager) approved as the driver.
-- [ ] Unit 3: production repository implementing AtomicDeliveryPersistencePort
-      against this schema (driver selection is a supply-chain decision to flag)
+- [x] Unit 3: PostgreSQL repository (migration 0009 + postgresDeliveryStore.ts
+      on the pinned `postgres` driver) implementing the preflight +
+      atomic-persistence ports; delivery service runs end-to-end against it in
+      the storage lab (5 pgtest scenarios incl. concurrency and retirement).
+      Shared appendPersistence helpers + extracted fictional crypto ports keep
+      the in-memory lab and PG store on one contract. Remaining in-lane:
+      attachments support, DB-authoritative timestamps, full relational
+      authority graph replacing the custody row.
 - [ ] Unit 4: section-11.2 restore drill + failover evidence (operational)
 
 ## Phase 3 — production web surface
