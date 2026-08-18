@@ -284,11 +284,21 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       /account/[address]. Prototype demo moved to src/shared, /shared +
       /projects 404 in production. Build on webpack with JBM's alias
       set. LIVE at app-production-bbdd.up.railway.app.
+- [x] APPEND LANE OPEN (e14e73c): per-sender custody fences (0019),
+      global policy log (0020: leaf per issued head + RFC 6962
+      checkpoint), keeper-triggered /v1/internal/policy-witness-sync
+      submits checkpoints to the witness policy namespace and flips
+      anchors missing->verified (equivocation = SEV-0 verbatim stop).
+      Grants re-anchor at the issued head hash post-issuance; locked
+      proof evidence digest derived per sender (fence-bound). POST
+      /v1/conversations/:id/envelopes = full atomic append (DPoP +
+      If-Match + idempotency); GET detail serves etag/epoch/policy-head
+      state. E2e: plan -> activation -> witness -> both-way sends ->
+      events read back. Deployed app+keeper with sync/witness env.
 - [ ] Then: browser/native MLS core (unblocks real conversation
-      activation from the UI + message send); per-sender custody fence
-      refactor (staff replies); append route verifier adapters; witness
-      aging for provisioning; custom domains; push subscribe UI; GitHub
-      auto-deploys after push.
+      activation from the UI + message send); frontend send/receive UI;
+      push subscribe UI; witness aging for provisioning; custom
+      domains; GitHub auto-deploys after push.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,
