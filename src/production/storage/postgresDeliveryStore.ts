@@ -1153,6 +1153,52 @@ export function createPostgresDeliveryAppendStore(
               ${JSON.stringify(acceptance)}::jsonb,
               ${observedAt}::timestamptz
             )`;
+          await tx`
+            INSERT INTO conversation_page_end_projections (
+              conversation_id, position, generation, release_profile_id,
+              delivery_limits_digest, etag, epoch, roster_version,
+              confirmed_transcript_hash, policy_head_id, policy_revision,
+              policy_mandatory_proposal_count,
+              policy_mandatory_proposal_set_hash,
+              policy_authorized_send_grant_set_hash,
+              policy_authorized_quota_policy_digest, policy_head_sequence,
+              policy_head_hash, policy_delivery_log_position,
+              policy_delivery_log_head_hash, policy_witness_checkpoint_id,
+              policy_witness_evidence_digest, created_at
+            ) VALUES (
+              ${signedEnvelope.conversationId}, ${signedEnvelope.position},
+              ${nextSnapshot.conversation.generation},
+              ${nextSnapshot.conversation.releaseProfileId},
+              ${bytea(nextSnapshot.conversation.deliveryLimitsDigest)},
+              ${nextSnapshot.conversation.etag},
+              ${nextSnapshot.conversation.epoch},
+              ${nextSnapshot.conversation.rosterVersion},
+              ${bytea(nextSnapshot.conversation.confirmedTranscriptHash)},
+              ${nextSnapshot.policyHead.policyHeadId},
+              ${nextSnapshot.policyHead.policyRevision},
+              ${nextSnapshot.policyHead.mandatoryProposalCount},
+              ${bytea(nextSnapshot.policyHead.mandatoryProposalSetHash)},
+              ${bytea(nextSnapshot.policyHead.authorizedSendGrantSetHash)},
+              ${bytea(nextSnapshot.policyHead.authorizedQuotaPolicyDigest)},
+              ${nextSnapshot.policyHead.policyHeadSequence},
+              ${bytea(nextSnapshot.policyHead.policyHeadHash)},
+              ${nextSnapshot.policyHead.deliveryLogPosition},
+              ${bytea(nextSnapshot.policyHead.deliveryLogHeadHash)},
+              ${nextSnapshot.policyHead.witnessCheckpointId},
+              ${bytea(nextSnapshot.policyHead.witnessEvidenceDigest)},
+              ${observedAt}::timestamptz
+            )`;
+          await tx`
+            INSERT INTO conversation_policy_transitions (
+              conversation_id, policy_head_sequence, policy_head_id,
+              policy_head_hash, effective_from_position, created_at
+            ) VALUES (
+              ${signedEnvelope.conversationId},
+              ${nextSnapshot.policyHead.policyHeadSequence},
+              ${nextSnapshot.policyHead.policyHeadId},
+              ${bytea(nextSnapshot.policyHead.policyHeadHash)},
+              ${signedEnvelope.position}, ${observedAt}::timestamptz
+            ) ON CONFLICT (conversation_id, policy_head_sequence) DO NOTHING`;
           const semanticallyEqual = applicationEnvelopeSemanticallyEqual(
             pending.admissionCommand.semanticIdentity,
             command.semanticIdentity,

@@ -553,4 +553,42 @@ describeStorage("PostgreSQL application-append repository", () => {
     );
     expect(healed).toMatchObject({ status: "accepted" });
   });
+
+  it("joins every accepted position to an immutable page-end projection", async () => {
+    const [counts] = await sql`
+      SELECT
+        (SELECT count(*) FROM conversation_page_end_projections
+         WHERE conversation_id = ${LAB_CONVERSATION_ID}) AS projections,
+        (SELECT count(*) FROM application_append_acceptances
+         WHERE conversation_id = ${LAB_CONVERSATION_ID}) AS acceptances`;
+    expect(String(counts.projections)).toBe(String(counts.acceptances));
+
+    const [anchor] = await sql`
+      SELECT etag, policy_head_sequence FROM conversation_page_end_projections
+      WHERE conversation_id = ${LAB_CONVERSATION_ID} AND position = 2`;
+    const snapshot = await store.loadSnapshot(
+      parseConversationId(LAB_CONVERSATION_ID),
+    );
+    expect(String(anchor.etag)).toBe(snapshot.conversation.etag);
+    expect(String(anchor.policy_head_sequence)).toBe(
+      snapshot.policyHead.policyHeadSequence,
+    );
+
+    await expect(
+      sql`
+        UPDATE conversation_page_end_projections SET etag = 'rewritten'
+        WHERE conversation_id = ${LAB_CONVERSATION_ID} AND position = 2`,
+    ).rejects.toThrow(/immutable/);
+    await expect(
+      sql`
+        DELETE FROM conversation_policy_transitions
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}`,
+    ).rejects.toThrow(/immutable/);
+
+    const [transition] = await sql`
+      SELECT effective_from_position FROM conversation_policy_transitions
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}
+        AND policy_head_sequence = ${snapshot.policyHead.policyHeadSequence}`;
+    expect(String(transition.effective_from_position)).toBe("2");
+  });
 });
