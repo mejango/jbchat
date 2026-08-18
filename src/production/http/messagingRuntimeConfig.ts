@@ -28,6 +28,7 @@ export type MessagingRuntimeConfig =
       readonly rpcEndpoints: Readonly<
         Record<string, readonly RpcEndpointConfig[]>
       > | null;
+      readonly provisioningSeed: Buffer | null;
       readonly manifest: {
         readonly source:
           | { readonly kind: "path"; readonly path: string }
@@ -95,6 +96,7 @@ export function loadMessagingRuntimeConfig(
     logSigner,
     cursor,
     rpcEndpoints: parseRpcEndpoints(environment.JBM_RPC_ENDPOINTS),
+    provisioningSeed: decodeSecret(environment.JBM_PROVISIONING_SEED),
     manifest: parseManifestConfig(
       environment.JBM_DEPLOYMENT_MANIFEST_PATH,
       environment.JBM_DEPLOYMENT_MANIFEST,

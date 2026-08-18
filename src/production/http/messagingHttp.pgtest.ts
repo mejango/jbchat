@@ -64,6 +64,10 @@ describeStorage("messaging HTTP surface", () => {
   let committer: EnrolledDevice;
   let target: EnrolledDevice;
   let pre: Record<string, unknown>;
+  let handlers8453: ReturnType<typeof createMessagingHttpHandlers>;
+  let customer: EnrolledDevice & { walletAddress: string };
+  let purchaseClaimHandle: string;
+  let projectOwnerAddress = `0x${"00".repeat(20)}`;
 
   const lowS = (signature: Buffer): Buffer => {
     const s = BigInt(`0x${signature.subarray(32).toString("hex")}`);
@@ -275,6 +279,7 @@ describeStorage("messaging HTTP surface", () => {
         cursor: { keyId: "lab-http-cursor", key: Buffer.alloc(32, 0x61) },
         rpcEndpoints: null,
         manifest: null,
+        provisioningSeed: Buffer.alloc(32, 0x63),
       }),
       connect: () => sql,
       now: () => NOW,
@@ -718,6 +723,9 @@ describeStorage("messaging HTTP surface", () => {
           if (method === "eth_getCode") {
             return `0x${terminalCode.toString("hex")}`;
           }
+          if (method === "eth_call") {
+            return `0x${"00".repeat(12)}${projectOwnerAddress.slice(2)}`;
+          }
           throw new Error(`unexpected method ${method}`);
         },
       });
@@ -766,7 +774,7 @@ describeStorage("messaging HTTP surface", () => {
       .x as string;
 
     const identitySecret = Buffer.alloc(32, 0x5f);
-    const handlers8453 = createMessagingHttpHandlers({
+    handlers8453 = createMessagingHttpHandlers({
       loadConfig: () => ({
         status: "configured",
         databaseUrl: DATABASE_URL!,
@@ -781,6 +789,7 @@ describeStorage("messaging HTTP surface", () => {
           source: { kind: "path", path: manifestPath },
           signerPublicKey: Buffer.from(signerPublic, "base64url"),
         },
+        provisioningSeed: Buffer.alloc(32, 0x63),
       }),
       connect: () => sql,
       now: () => NOW,
@@ -793,13 +802,20 @@ describeStorage("messaging HTTP surface", () => {
         finalizedBlockHash: Buffer.alloc(32, 0x8b),
         providerQuorumHash: Buffer.alloc(32, 0x8c),
       }),
+      logSigner: {
+        signCheckpointDigest: async (_keyId, digest) =>
+          signFictionalDeliveryCheckpointDigestForTesting(
+            Buffer.from(digest, "base64url"),
+          ).toString("base64url"),
+      },
+      logSignerKeyId: "fictional-delivery-lab-2026q3",
       chainRegistry: registry,
       replayGuard: createInProcessDpopReplayGuard({
         nowEpochMilliseconds: () => NOW_MS,
       }),
     });
 
-    const customer = await enrollOverHttp(handlers8453, "eip155:8453");
+    customer = await enrollOverHttp(handlers8453, "eip155:8453");
     payData = encodePayEventData(customer.walletAddress);
 
     const claimResponse = await handlers8453.createPurchaseClaim(
@@ -828,6 +844,7 @@ describeStorage("messaging HTTP surface", () => {
       validUntil: string;
     };
     expect(issued.capability).toBe("purchase-support");
+    purchaseClaimHandle = issued.claimHandle;
     const [grantRow] = await sql`
       SELECT state, capability, source_chain_id FROM eligibility_grants
       WHERE grant_id = ${issued.grantId}`;
@@ -875,6 +892,176 @@ describeStorage("messaging HTTP surface", () => {
       intent.intentId,
     );
     expect(cancel.status).toBe(200);
+  });
+
+  it("activates a support conversation from plan to inbox", async () => {
+    // The project owner enrolls, proves on-chain ownership by quorum
+    // eth_call, registers as support staff, and stocks a KeyPackage.
+    const owner = await enrollOverHttp(handlers8453, "eip155:8453");
+    projectOwnerAddress = owner.walletAddress;
+    const staffResponse = await handlers8453.registerProjectStaff(
+      authedRequest(
+        owner,
+        "POST",
+        `/v1/projects/${String(pre.project_ref_id)}/staff-registrations`,
+        {},
+      ),
+      String(pre.project_ref_id),
+    );
+    expect(staffResponse.status).toBe(201);
+    const published = await handlers8453.publishKeyPackages(
+      authedRequest(
+        owner,
+        "POST",
+        `/v1/installations/${owner.installationId}/key-packages`,
+        {
+          keyPackages: [
+            { keyPackage: randomBytes(220).toString("base64url") },
+          ],
+        },
+      ),
+      owner.installationId,
+    );
+    expect(published.status).toBe(201);
+
+    // The customer turns the (never-burned) claim handle into a plan.
+    const planResponse = await handlers8453.createConversationPlan(
+      authedRequest(customer, "POST", "/v1/conversation-plans", {
+        eligibilityClaimHandle: purchaseClaimHandle,
+      }),
+    );
+    if (planResponse.status !== 201) {
+      throw new Error(`plan refused: ${await planResponse.text()}`);
+    }
+    const plan = (await planResponse.json()) as {
+      planId: string;
+      conversationId: string;
+      rosterHash: string;
+      externalSendersHash: string;
+      roster: { installationId: string; bootstrapMode: string }[];
+    };
+    expect(plan.roster.length).toBe(2);
+    const welcomeTargets = plan.roster.filter(
+      (member) => member.bootstrapMode === "welcome",
+    );
+    expect(welcomeTargets.map((member) => member.installationId)).toEqual([
+      owner.installationId,
+    ]);
+
+    const commitBytes = Buffer.from("activation-commit", "utf8");
+    const activateResponse = await handlers8453.activateConversation(
+      new Request(`${BASE}/v1/conversations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": MEDIA_TYPE,
+          "If-Match": `"plan-${plan.planId}-1"`,
+          Authorization: `DPoP ${customer.accessToken}`,
+          DPoP: dpopProof(customer, "POST", `${BASE}/v1/conversations`),
+        },
+        body: JSON.stringify({
+          planId: plan.planId,
+          conversationId: plan.conversationId,
+          rosterHash: plan.rosterHash,
+          externalSendersHash: plan.externalSendersHash,
+          mls: {
+            cipherSuite: "0x0001",
+            groupId: randomBytes(32).toString("base64url"),
+            epoch: "1",
+            envelopeId: randomUUID(),
+            commit: commitBytes.toString("base64url"),
+            envelopeSha256: createHash("sha256")
+              .update(commitBytes)
+              .digest("base64url"),
+            resultingConfirmedTranscriptHash: Buffer.alloc(32, 0xcd).toString(
+              "base64url",
+            ),
+            welcomeByInstallation: [
+              {
+                installationId: owner.installationId,
+                welcome: Buffer.from("activation-welcome", "utf8").toString(
+                  "base64url",
+                ),
+                welcomeSha256: createHash("sha256")
+                  .update(Buffer.from("activation-welcome", "utf8"))
+                  .digest("base64url"),
+              },
+            ],
+          },
+        }),
+      }),
+    );
+    if (activateResponse.status !== 201) {
+      throw new Error(`activation refused: ${await activateResponse.text()}`);
+    }
+    const activated = (await activateResponse.json()) as {
+      conversationId: string;
+    };
+    expect(activated.conversationId).toBe(plan.conversationId);
+
+    // Both parties see the conversation in their real inboxes.
+    const customerInbox = await handlers8453.listConversations(
+      authedRequest(customer, "GET", "/v1/conversations"),
+    );
+    expect(customerInbox.status).toBe(200);
+    const customerList = (await customerInbox.json()) as {
+      conversations: { conversationId: string; role: string; state: string }[];
+    };
+    const created = customerList.conversations.find(
+      (conversation) => conversation.conversationId === plan.conversationId,
+    );
+    expect(created).toMatchObject({ role: "customer", state: "active" });
+    const ownerInbox = await handlers8453.listConversations(
+      authedRequest(owner, "GET", "/v1/conversations"),
+    );
+    const ownerList = (await ownerInbox.json()) as {
+      conversations: { conversationId: string; role: string }[];
+    };
+    expect(
+      ownerList.conversations.find(
+        (conversation) => conversation.conversationId === plan.conversationId,
+      ),
+    ).toMatchObject({ role: "project-staff" });
+
+    // The events page serves the position-one Commit through a cursor.
+    const eventsPath = `/v1/conversations/${plan.conversationId}/events`;
+    const page = await handlers8453.readConversationEvents(
+      authedRequest(customer, "GET", eventsPath),
+      plan.conversationId,
+    );
+    if (page.status !== 200) {
+      throw new Error(`events refused: ${await page.text()}`);
+    }
+    const events = (await page.json()) as {
+      events: { position: string; envelopeClass: string }[];
+      nextCursor: string;
+    };
+    expect(events.events).toHaveLength(1);
+    expect(events.events[0]).toMatchObject({
+      position: "1",
+      envelopeClass: "mls_commit",
+    });
+    expect(events.nextCursor.startsWith("cc1.")).toBe(true);
+
+    // The owner's mailbox item carries the Welcome via mls_welcomes.
+    const welcomes = await sql`
+      SELECT target_installation_id FROM mls_welcomes
+      WHERE conversation_id = ${plan.conversationId}`;
+    expect(welcomes).toHaveLength(1);
+    expect(String(welcomes[0].target_installation_id)).toBe(
+      owner.installationId,
+    );
+
+    // A second plan for the same customer reuses the active generation.
+    const reuse = await handlers8453.createConversationPlan(
+      authedRequest(customer, "POST", "/v1/conversation-plans", {
+        eligibilityClaimHandle: purchaseClaimHandle,
+      }),
+    );
+    expect(reuse.status).toBe(200);
+    await expect(reuse.json()).resolves.toMatchObject({
+      action: "reuse_generation",
+      conversationId: plan.conversationId,
+    });
   });
 });
 

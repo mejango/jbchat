@@ -97,7 +97,15 @@ export function createPolicyHeadIssuanceStore(context: {
     async issuePolicyHead(
       input: PolicyHeadIssuanceInput,
     ): Promise<IssuedPolicyHead> {
-      return sql.begin(async (tx) => {
+      // Composable inside a caller's transaction: a TransactionSql runs a
+      // savepoint instead of a nested BEGIN.
+      const begin =
+        typeof (sql as { begin?: unknown }).begin === "function"
+          ? (sql as Sql).begin.bind(sql)
+          : (sql as unknown as { savepoint: Sql["begin"] }).savepoint.bind(
+              sql as unknown as { savepoint: Sql["begin"] },
+            );
+      return begin(async (tx) => {
         const issuedAt = await dbNow(tx);
         const expiresAt = new Date(
           Date.parse(issuedAt) + HEAD_VALIDITY_MILLISECONDS,

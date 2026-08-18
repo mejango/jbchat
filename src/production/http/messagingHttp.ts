@@ -40,6 +40,12 @@ import {
   type MembershipCommitStore,
 } from "../storage/membershipCommitStore";
 import {
+  createConversationPlanStore,
+  type ConversationPlanStore,
+} from "../storage/conversationPlanStore";
+import { readCallAtFinalized } from "../chain/quorumReads";
+import { computeKeyPackageRef } from "../identity/identityCrypto";
+import {
   createConversationPageReader,
 } from "../storage/conversationPageReader";
 import { createPostgresCursorNonceAllocator } from "../storage/cursorNonceAllocator";
@@ -78,6 +84,7 @@ export interface MessagingHttpContext {
   readonly walletProofVerifier?: WalletProofVerifierPort;
   readonly credentialSigner?: DeviceCredentialSignerPort;
   readonly logSigner?: ExternalProposalSigningPort;
+  readonly logSignerKeyId?: string;
   readonly replayGuard?: DpopReplayGuard;
   readonly chainRegistry?: ChainTransportRegistry;
 }
@@ -117,6 +124,27 @@ export interface MessagingHttpHandlers {
     conversationId: string,
   ) => Promise<Response>;
   readonly createPurchaseClaim: (request: Request) => Promise<Response>;
+  readonly createConversationPlan: (request: Request) => Promise<Response>;
+  readonly activateConversation: (request: Request) => Promise<Response>;
+  readonly listConversations: (request: Request) => Promise<Response>;
+  readonly registerProjectStaff: (
+    request: Request,
+    projectRefId: string,
+  ) => Promise<Response>;
+  readonly publishKeyPackages: (
+    request: Request,
+    installationId: string,
+  ) => Promise<Response>;
+  readonly registerPushEndpoint: (
+    request: Request,
+    installationId: string,
+    endpointId: string,
+  ) => Promise<Response>;
+  readonly deletePushEndpoint: (
+    request: Request,
+    installationId: string,
+    endpointId: string,
+  ) => Promise<Response>;
 }
 
 interface AuthenticatedSession {
@@ -168,6 +196,8 @@ export function createMessagingHttpHandlers(
       readonly storeFor: (chainNumber: number) => EligibilityStore | null;
       readonly manifestId: string;
     } | null;
+    readonly plans: ConversationPlanStore | null;
+    readonly chainRegistry: ChainTransportRegistry | null;
   }
   let cached: Wired | null = null;
 
@@ -229,6 +259,19 @@ export function createMessagingHttpHandlers(
         contextValue.chainRegistry ?? registryFromEndpoints(config.rpcEndpoints),
         now,
       ),
+      plans: (() => {
+        const keyId = config.logSigner?.keyId ?? contextValue.logSignerKeyId;
+        if (!config.provisioningSeed || !logSigner || !keyId) return null;
+        return createConversationPlanStore({
+          sql,
+          provisioningSeed: config.provisioningSeed,
+          logSigner,
+          logSigningKeyId: keyId,
+          hmacEligibilityClaimHandle: crypto.hmacEligibilityClaimHandle,
+        });
+      })(),
+      chainRegistry:
+        contextValue.chainRegistry ?? registryFromEndpoints(config.rpcEndpoints),
     };
     return cached;
   };
@@ -756,6 +799,305 @@ export function createMessagingHttpHandlers(
         return problem(503, issued.reasonCode);
       }
       return problem(issued.status === "ineligible" ? 403 : 400, issued.reasonCode);
+    },
+
+    async createConversationPlan(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.plans) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const handle = (body as Record<string, unknown>).eligibilityClaimHandle;
+      if (typeof handle !== "string") return problem(400, "malformed_request");
+      const created = await wired.plans.createPlan({
+        creatorAccountId: session.accountId,
+        creatorInstallationId: session.installationId,
+        eligibilityClaimHandle: handle,
+      });
+      if (created.status === "created") return jsonNoStore(201, created.plan);
+      if (created.status === "reuse_generation") {
+        return jsonNoStore(200, {
+          action: "reuse_generation",
+          conversationId: created.conversationId,
+        });
+      }
+      return problem(
+        created.reasonCode === "recipient_keys_unavailable" ? 409 : 403,
+        created.reasonCode,
+      );
+    },
+
+    async activateConversation(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.plans) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_COMMIT_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const planId = String((body as Record<string, unknown>).planId ?? "");
+      const ifMatch = request.headers.get("if-match");
+      if (ifMatch !== `"plan-${planId}-1"`) {
+        return problem(412, "plan_etag_mismatch");
+      }
+      const result = await wired.plans.activate(body, session.installationId);
+      if (result.status !== "activated") {
+        return problem(
+          result.reasonCode === "malformed_request" ? 400 : 409,
+          result.reasonCode,
+        );
+      }
+      return jsonNoStore(201, result);
+    },
+
+    async listConversations(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const rows = await wired.sql`
+        SELECT c.conversation_id, c.state, c.delivery_purpose,
+               c.last_position, c.last_activity_at, c.created_at,
+               m.role, m.joined_position, m.removed_position,
+               p.chain_id, p.project_id::text AS project_id,
+               encode(p.projects_contract, 'hex') AS projects_contract
+        FROM memberships m
+        JOIN conversations c ON c.conversation_id = m.conversation_id
+        JOIN project_refs p ON p.project_ref_id = c.project_ref_id
+        WHERE m.installation_id = ${session.installationId}
+        ORDER BY c.last_activity_at DESC
+        LIMIT 100`;
+      return jsonNoStore(200, {
+        conversations: rows.map((row) => ({
+          conversationId: String(row.conversation_id),
+          state: String(row.state),
+          deliveryPurpose: String(row.delivery_purpose),
+          role: String(row.role),
+          lastPosition: String(row.last_position),
+          lastActivityAt: new Date(row.last_activity_at as Date).toISOString(),
+          createdAt: new Date(row.created_at as Date).toISOString(),
+          removedPosition:
+            row.removed_position === null
+              ? null
+              : String(row.removed_position),
+          project: {
+            chainId: String(row.chain_id),
+            projectId: String(row.project_id),
+            projectsContract: `0x${String(row.projects_contract)}`,
+          },
+        })),
+      });
+    },
+
+    async registerProjectStaff(
+      request: Request,
+      projectRefId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.chainRegistry) return notFound();
+      if (!UUID_PATTERN.test(projectRefId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+
+      const projects = await wired.sql`
+        SELECT chain_id, project_id::text AS project_id,
+               encode(projects_contract, 'hex') AS projects_contract
+        FROM project_refs
+        WHERE project_ref_id = ${projectRefId} AND status = 'active'`;
+      if (projects.length !== 1) return problem(404, "project_unknown");
+      const chainMatch = String(projects[0].chain_id).match(/^eip155:(\d+)$/);
+      if (!chainMatch) return problem(404, "project_unknown");
+      const transports = wired.chainRegistry.transportsFor(
+        Number(chainMatch[1]),
+      );
+      if (!transports) return problem(503, "chain_unavailable");
+
+      // ERC-721 ownerOf(projectId) on the pinned projects contract at the
+      // finalized quorum head proves who may register support staff.
+      const projectIdHex = BigInt(String(projects[0].project_id))
+        .toString(16)
+        .padStart(64, "0");
+      const call = await readCallAtFinalized(
+        transports,
+        2,
+        `0x${String(projects[0].projects_contract)}`,
+        `0x6352211e${projectIdHex}`,
+      );
+      if (call.status !== "ok" || call.returnData.byteLength !== 32) {
+        return problem(503, "chain_unavailable");
+      }
+      const ownerAddress = `0x${call.returnData.subarray(12).toString("hex")}`;
+      const links = await wired.sql`
+        SELECT account_id FROM wallet_links
+        WHERE wallet_ref_lookup = ${wired.crypto.hmacWalletRefLookup(
+          `${String(projects[0].chain_id)}:${ownerAddress}`,
+        )} AND status = 'active'`;
+      if (
+        links.length !== 1 ||
+        String(links[0].account_id) !== session.accountId
+      ) {
+        return problem(403, "not_project_owner");
+      }
+      await wired.sql`
+        INSERT INTO project_staff_registrations (
+          project_ref_id, installation_id, account_id,
+          registered_by_owner_address, ownership_block,
+          ownership_block_hash, state, registered_at
+        ) VALUES (
+          ${projectRefId}, ${session.installationId}, ${session.accountId},
+          ${Buffer.from(ownerAddress.slice(2), "hex")},
+          ${String(call.blockNumber ?? 0n)},
+          ${Buffer.from(
+            String(call.blockHash ?? `0x${"00".repeat(32)}`).slice(2),
+            "hex",
+          )},
+          'active', ${now()}::timestamptz
+        ) ON CONFLICT (project_ref_id, installation_id)
+        DO UPDATE SET state = 'active', revoked_at = NULL`;
+      return jsonNoStore(201, {
+        projectRefId,
+        installationId: session.installationId,
+        ownerAddress,
+      });
+    },
+
+    async publishKeyPackages(
+      request: Request,
+      installationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!UUID_PATTERN.test(installationId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      if (session.installationId !== installationId) {
+        return problem(403, "installation_mismatch");
+      }
+      const body = await readBody(request, MAX_COMMIT_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const items = (body as Record<string, unknown>).keyPackages;
+      if (!Array.isArray(items) || items.length === 0 || items.length > 20) {
+        return problem(400, "malformed_request");
+      }
+      const credentials = await wired.sql`
+        SELECT device_credential_id, revocation_version,
+               encode(mls_credential_fingerprint, 'base64') AS fingerprint
+        FROM device_credentials
+        WHERE installation_id = ${installationId} AND status = 'active'`;
+      if (credentials.length !== 1) return problem(403, "credential_invalid");
+      const nowIso = now();
+      const accepted: string[] = [];
+      for (const item of items) {
+        const record = item as Record<string, unknown>;
+        const encoded = record.keyPackage;
+        if (typeof encoded !== "string" || !/^[A-Za-z0-9_-]+$/.test(encoded)) {
+          return problem(400, "malformed_request");
+        }
+        const bytes = Buffer.from(encoded, "base64url");
+        if (bytes.byteLength === 0 || bytes.byteLength > 65536) {
+          return problem(400, "malformed_request");
+        }
+        const ref = computeKeyPackageRef(bytes);
+        const expiresAt = new Date(
+          Date.parse(nowIso) + 7 * 24 * 60 * 60 * 1_000,
+        ).toISOString();
+        const inserted = await wired.sql`
+          INSERT INTO key_packages (
+            key_package_ref, installation_id, device_credential_id,
+            device_credential_revocation_version, release_profile_id,
+            package_bytes, package_sha256, mls_credential_fingerprint,
+            state, created_at, expires_at
+          ) VALUES (
+            ${ref}, ${installationId},
+            ${String(credentials[0].device_credential_id)},
+            ${String(credentials[0].revocation_version)},
+            'delivery-v1-2026q3', ${bytes},
+            ${createHash("sha256").update(bytes).digest()},
+            ${Buffer.from(String(credentials[0].fingerprint), "base64")},
+            'available', ${nowIso}::timestamptz, ${expiresAt}::timestamptz
+          ) ON CONFLICT (key_package_ref) DO NOTHING
+          RETURNING key_package_ref`;
+        if (inserted.length === 1) accepted.push(ref.toString("base64url"));
+      }
+      return jsonNoStore(201, { accepted });
+    },
+
+    async registerPushEndpoint(
+      request: Request,
+      installationId: string,
+      endpointId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "PUT") return notFound();
+      if (!UUID_PATTERN.test(installationId) || !UUID_PATTERN.test(endpointId)) {
+        return notFound();
+      }
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      if (session.installationId !== installationId) {
+        return problem(403, "installation_mismatch");
+      }
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const record = body as Record<string, unknown>;
+      const keys = record.keys as Record<string, unknown> | undefined;
+      if (
+        record.provider !== "webpush" ||
+        typeof record.endpoint !== "string" ||
+        !record.endpoint.startsWith("https://") ||
+        typeof keys?.p256dh !== "string" ||
+        typeof keys?.auth !== "string"
+      ) {
+        return problem(400, "malformed_request");
+      }
+      const sealed = wired.crypto.sealPayload(
+        JSON.stringify({
+          endpoint: record.endpoint,
+          p256dh: keys.p256dh,
+          auth: keys.auth,
+        }),
+      );
+      await wired.sql`
+        INSERT INTO push_endpoints (
+          endpoint_id, installation_id, provider, endpoint_fingerprint,
+          encrypted_configuration, kms_key_version, status, created_at
+        ) VALUES (
+          ${endpointId}, ${installationId}, 'webpush',
+          ${createHash("sha256")
+            .update(String(record.endpoint), "utf8")
+            .digest()},
+          ${sealed.ciphertext}, ${sealed.kmsKeyVersion}, 'active',
+          ${now()}::timestamptz
+        ) ON CONFLICT (endpoint_id) DO UPDATE SET
+          encrypted_configuration = EXCLUDED.encrypted_configuration,
+          kms_key_version = EXCLUDED.kms_key_version,
+          status = 'active'`;
+      return new Response(null, { status: 204, headers: noStoreHeaders() });
+    },
+
+    async deletePushEndpoint(
+      request: Request,
+      installationId: string,
+      endpointId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "DELETE") return notFound();
+      if (!UUID_PATTERN.test(installationId) || !UUID_PATTERN.test(endpointId)) {
+        return notFound();
+      }
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      if (session.installationId !== installationId) {
+        return problem(403, "installation_mismatch");
+      }
+      await wired.sql`
+        UPDATE push_endpoints SET status = 'deleted'
+        WHERE endpoint_id = ${endpointId}
+          AND installation_id = ${installationId}`;
+      return new Response(null, { status: 204, headers: noStoreHeaders() });
     },
   });
 }

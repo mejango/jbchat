@@ -315,3 +315,64 @@ function hexData(value: unknown): string {
   }
   return text;
 }
+
+export type QuorumCallResult =
+  | { readonly status: "ok"; readonly returnData: Buffer }
+  | { readonly status: "disagreement" }
+  | { readonly status: "unavailable" };
+
+/** Quorum eth_call at the LOWEST finalized head; providers must agree. */
+export async function readCallAtFinalized(
+  transports: readonly JsonRpcTransport[],
+  minimumQuorum: number,
+  to: string,
+  data: string,
+): Promise<QuorumCallResult & { blockNumber?: bigint; blockHash?: string }> {
+  if (transports.length < minimumQuorum) {
+    return Object.freeze({ status: "unavailable" });
+  }
+  try {
+    const heads = await Promise.all(
+      transports.map(async (transport) => {
+        const block = expectBlock(
+          await transport.request("eth_getBlockByNumber", ["finalized", false]),
+        );
+        return hexQuantity(block.number, "finalized number");
+      }),
+    );
+    const lowest = heads.reduce((low, n) => (n < low ? n : low));
+    const blockTag = `0x${lowest.toString(16)}`;
+    const [hashes, results] = await Promise.all([
+      Promise.all(
+        transports.map(async (transport) => {
+          const block = expectBlock(
+            await transport.request("eth_getBlockByNumber", [blockTag, false]),
+          );
+          return hexHash(block.hash, "block hash at height");
+        }),
+      ),
+      Promise.all(
+        transports.map(async (transport) => {
+          const result = await transport.request("eth_call", [
+            { to, data },
+            blockTag,
+          ]);
+          const text = String(result).toLowerCase();
+          if (!HEX_DATA.test(text)) throw new Error("Malformed call result.");
+          return text;
+        }),
+      ),
+    ]);
+    if (new Set(hashes).size !== 1 || new Set(results).size !== 1) {
+      return Object.freeze({ status: "disagreement" });
+    }
+    return Object.freeze({
+      status: "ok",
+      returnData: Buffer.from(results[0].slice(2), "hex"),
+      blockNumber: lowest,
+      blockHash: hashes[0],
+    });
+  } catch {
+    return Object.freeze({ status: "unavailable" });
+  }
+}
