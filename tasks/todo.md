@@ -127,9 +127,13 @@ do not exist for Candidate A either.
 - [ ] Storage-lane follow-ups deferred from Phase 2: DB-authoritative
       timestamps, full relational authority graph replacing the custody
       row, policy-head/quota anchors, scope mappings
-- [ ] Written Candidate-B (XMTP) evaluation against the provider-specific
-      hard gates (launch-gates.md 341-353) as ENG-001 decision support —
-      analysis document only; selection stays with Protocol Security
+- [x] Written Candidate-B (XMTP) evaluation (1fb5883):
+      docs/xmtp-candidate-b-evaluation.md — verified ciphersuite conflict
+      (XMTP pins ChaCha20-Poly1305; frozen profile mandates 0x0001
+      AES128GCM), flagged last-resort-KeyPackage and external-proposal
+      conflicts pending source re-verification, and four provider-gate
+      bullets without written production evidence today. ENG-001 closure
+      itself stays with Protocol Security.
 
 ## Review notes
 (append as phases complete)
