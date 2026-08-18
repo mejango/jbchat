@@ -19,6 +19,7 @@ import {
 } from "../delivery/hashes";
 import { ZERO_HASH32 } from "../delivery/valueObjects";
 import { createPolicyHeadIssuanceStore } from "./policyHeadIssuanceStore";
+import { leafHash as merkleLeafHash, merkleRoot } from "../witness/merkleLog";
 import type { PolicyHeadSignerPort } from "../delivery/policyHeadIssuance";
 import type { ExternalProposalSigningPort } from "./externalProposalStore";
 import {
@@ -983,6 +984,7 @@ export function createConversationPlanStore(
           return {
             member,
             credentialId,
+            grantWithoutDigests,
             grantEvidenceDigest: computeConversationSendGrantEvidenceDigest(
               grantWithoutDigests as never,
             ),
@@ -995,9 +997,6 @@ export function createConversationPlanStore(
         const creatorGrant = memberGrants.find(
           (grant) => grant.member.bootstrapMode === "creator",
         )!;
-        const grantEvidenceDigest = creatorGrant.grantEvidenceDigest;
-        const grantInclusionEvidenceDigest =
-          creatorGrant.grantInclusionEvidenceDigest;
         const sendGrantSetMembers = memberGrants.map((grant) => ({
           grantEvidenceDigest: grant.grantEvidenceDigest,
           grantInclusionEvidenceDigest: grant.grantInclusionEvidenceDigest,
@@ -1033,6 +1032,19 @@ export function createConversationPlanStore(
           mandatoryProposals: [],
           sendGrantSetMembers,
         });
+        // Re-anchor every grant at the issued head. The grant digest
+        // commits the head hash, and the head's signed body committed the
+        // genesis zero-anchored digests - the bootstrap order the kernel
+        // admits: rows carry the post-issuance digests the append path
+        // recomputes.
+        for (const grant of memberGrants) {
+          grant.grantEvidenceDigest = computeConversationSendGrantEvidenceDigest(
+            {
+              ...grant.grantWithoutDigests,
+              policyHeadHash: issued.policyHeadHash,
+            } as never,
+          );
+        }
         const served = await issuance.readNewestPolicyHead(conversationId);
         if (!served) {
           return Object.freeze({
@@ -1078,8 +1090,8 @@ export function createConversationPlanStore(
             ${headExpiry}::timestamptz, 'missing', ${null}, ${null},
             0, ${zeroSetHash("jb-msg-policy-mandatory-proposal-set/v1")},
             ${zeroSetHash("jb-msg-send-grant-set/v1")},
-            ${Buffer.from(grantEvidenceDigest, "base64url")},
-            ${Buffer.from(grantInclusionEvidenceDigest, "base64url")},
+            ${Buffer.from(creatorGrant.grantEvidenceDigest, "base64url")},
+            ${Buffer.from(creatorGrant.grantInclusionEvidenceDigest, "base64url")},
             ${plan.quota_policy_digest as Buffer},
             ${issued.policyHeadSequence === "1" ? 0 : Number(issued.policyHeadSequence) - 1},
             ${
@@ -1090,6 +1102,49 @@ export function createConversationPlanStore(
             ${stableUuid("prior-witness-checkpoint", conversationId)},
             ${deriveSeed("prior-witness", conversationId)},
             ${now}::timestamptz
+          )`;
+
+        // Global policy log: this head becomes a leaf, and a checkpoint
+        // commits the RFC 6962 root over the whole prefix. The keeper
+        // submits unwitnessed checkpoints to the witness's policy
+        // namespace; heads stay witness_state='missing' - and appends
+        // stay closed - until the cosigned receipt lands.
+        const leafCountRows = await tx`
+          SELECT count(*)::int AS total FROM policy_log_leaves`;
+        const leafIndex = Number(leafCountRows[0].total);
+        await tx`
+          INSERT INTO policy_log_leaves (
+            leaf_index, policy_head_id, head_hash, created_at
+          ) VALUES (
+            ${leafIndex}, ${issued.policyHeadId},
+            ${Buffer.from(issued.policyHeadHash, "base64url")},
+            ${now}::timestamptz
+          )`;
+        const allLeaves = await tx`
+          SELECT head_hash FROM policy_log_leaves ORDER BY leaf_index`;
+        const policyRoot = merkleRoot(
+          allLeaves.map((row) =>
+            merkleLeafHash(Buffer.from(row.head_hash as Uint8Array)),
+          ),
+        );
+        const previousCheckpoint = await tx`
+          SELECT checkpoint_id FROM policy_log_checkpoints
+          WHERE tree_size > 0 AND signer_key_id = 'jbm-policy-log-2026q3'
+          ORDER BY tree_size DESC LIMIT 1`;
+        const policyLogKeys = ed25519(deriveSeed("policy-log-signer", "global"));
+        await tx`
+          INSERT INTO policy_log_checkpoints (
+            checkpoint_id, tree_size, root_hash, previous_checkpoint_id,
+            signer_key_id, signature, witness_key_id, witness_signature,
+            created_at
+          ) VALUES (
+            ${randomUUID()}, ${leafIndex + 1}, ${policyRoot},
+            ${previousCheckpoint.length === 1
+              ? String(previousCheckpoint[0].checkpoint_id)
+              : null},
+            'jbm-policy-log-2026q3',
+            ${signNode(null, policyRoot, policyLogKeys.privateKey)},
+            'jbm-witness-pending', ${Buffer.alloc(1)}, ${now}::timestamptz
           )`;
 
         // Send grants for every member; each column mirrors the
@@ -1115,7 +1170,8 @@ export function createConversationPlanStore(
               ${grant.member.accountId}, ${grant.member.installationId},
               ${now}::timestamptz, ${credentialExpiry}::timestamptz,
               'send_application', 'active', 1, ${issuedSequence},
-              ${Buffer.alloc(32)}, ${credentialExpiry}::timestamptz,
+              ${Buffer.from(issued.policyHeadHash, "base64url")},
+              ${credentialExpiry}::timestamptz,
               ${Buffer.from(grant.grantEvidenceDigest, "base64url")},
               ${Buffer.from(grant.grantInclusionEvidenceDigest, "base64url")}
             )`;
@@ -1324,6 +1380,21 @@ function quotaBindingsFor(
     operationLimit: "1000",
     byteLimit: "1048576",
   }));
+}
+
+/** The deployment trust context every activation-created conversation
+ * binds; the append lane's admission checks requests against it. */
+export function serviceTrustContext(provisioningSeed: Buffer) {
+  const trustRoot = createHmac("sha256", provisioningSeed)
+    .update(`release-trust-root\n${RELEASE_PROFILE_ID}`, "utf8")
+    .digest();
+  return Object.freeze({
+    realmId: SERVICE_REALM_ID,
+    releaseProfileId: RELEASE_PROFILE_ID,
+    releaseTrustRootDigest: trustRoot.toString("base64url"),
+    deliveryLimitsDigest: computeDeliveryLimitsDigest(DELIVERY_LIMITS as never),
+    deliveryLimits: DELIVERY_LIMITS,
+  });
 }
 
 function zeroSetHash(domain: string): Buffer {

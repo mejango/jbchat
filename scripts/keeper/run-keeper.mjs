@@ -39,3 +39,25 @@ for (const child of children) {
     process.exit(code ?? 1);
   });
 }
+
+// The policy-witness sync rides the keeper too: a lightweight trigger loop
+// against the app's internal route (the app holds the witness credentials).
+if (process.env.JBM_INTERNAL_SYNC_URL && process.env.JBM_INTERNAL_SYNC_TOKEN) {
+  const loop = async () => {
+    for (;;) {
+      try {
+        await fetch(process.env.JBM_INTERNAL_SYNC_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.JBM_INTERNAL_SYNC_TOKEN}`,
+          },
+          signal: AbortSignal.timeout(30_000),
+        });
+      } catch (error) {
+        console.error("Policy witness sync trigger failed:", String(error));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+    }
+  };
+  void loop();
+}

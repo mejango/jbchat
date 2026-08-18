@@ -32,6 +32,9 @@ import {
 import { setDeliveryLabClock } from "../storage/postgresDeliveryLab.testing";
 import { createInProcessDpopReplayGuard } from "./dpop";
 import { createMessagingHttpHandlers } from "./messagingHttp";
+import { fictionalDeliveryLabKeyPairForTesting } from "../delivery/fictionalCryptoPorts.testing";
+import { runPolicyWitnessSync } from "../witness/policyWitnessSync";
+import { createWitnessCore } from "../witness/witnessCore";
 import {
   composeDeploymentManifest,
   signDeploymentManifest,
@@ -68,6 +71,8 @@ describeStorage("messaging HTTP surface", () => {
   let customer: EnrolledDevice & { walletAddress: string };
   let purchaseClaimHandle: string;
   let projectOwnerAddress = `0x${"00".repeat(20)}`;
+  let activatedConversationId: string;
+  let projectOwner: EnrolledDevice & { walletAddress: string };
 
   const lowS = (signature: Buffer): Buffer => {
     const s = BigInt(`0x${signature.subarray(32).toString("hex")}`);
@@ -809,6 +814,7 @@ describeStorage("messaging HTTP surface", () => {
           ).toString("base64url"),
       },
       logSignerKeyId: "fictional-delivery-lab-2026q3",
+      deliveryKeys: fictionalDeliveryLabKeyPairForTesting(),
       chainRegistry: registry,
       replayGuard: createInProcessDpopReplayGuard({
         nowEpochMilliseconds: () => NOW_MS,
@@ -898,6 +904,7 @@ describeStorage("messaging HTTP surface", () => {
     // The project owner enrolls, proves on-chain ownership by quorum
     // eth_call, registers as support staff, and stocks a KeyPackage.
     const owner = await enrollOverHttp(handlers8453, "eip155:8453");
+    projectOwner = owner;
     projectOwnerAddress = owner.walletAddress;
     const staffResponse = await handlers8453.registerProjectStaff(
       authedRequest(
@@ -997,6 +1004,7 @@ describeStorage("messaging HTTP surface", () => {
       conversationId: string;
     };
     expect(activated.conversationId).toBe(plan.conversationId);
+    activatedConversationId = plan.conversationId;
 
     // Both parties see the conversation in their real inboxes.
     const customerInbox = await handlers8453.listConversations(
@@ -1071,6 +1079,161 @@ describeStorage("messaging HTTP surface", () => {
       action: "reuse_generation",
       conversationId: plan.conversationId,
     });
+  });
+
+  it("sends application messages both ways once the policy head is witnessed", async () => {
+    // A fresh witness cosigns the policy log; heads flip to verified and
+    // the append lane opens.
+    await sql.unsafe("DROP DATABASE IF EXISTS jbm_witness_lab3");
+    await sql.unsafe("CREATE DATABASE jbm_witness_lab3");
+    const witnessUrl3 = DATABASE_URL!.replace(/[^/]+$/, "jbm_witness_lab3");
+    const runner = (await import(
+      // @ts-expect-error the migration runner is intentionally untyped .mjs
+      /* @vite-ignore */ "../../../scripts/storage/migrate.mjs"
+    )) as {
+      migrateStorage: (
+        databaseUrl: string,
+        directory?: string,
+        log?: (message: string) => void,
+      ) => unknown;
+    };
+    runner.migrateStorage(
+      witnessUrl3,
+      new URL("../../../witness/migrations", import.meta.url).pathname,
+      () => {},
+    );
+    const witnessSql3 = postgres(witnessUrl3, { max: 2, onnotice: () => {} });
+    try {
+      const witnessSeed = Buffer.alloc(32, 0x71);
+      const witnessKeys = createPrivateKey({
+        key: Buffer.concat([
+          Buffer.from("302e020100300506032b657004220420", "hex"),
+          witnessSeed,
+        ]),
+        format: "der",
+        type: "pkcs8",
+      });
+      const core3 = createWitnessCore({
+        sql: witnessSql3,
+        signer: {
+          witnessKeyId: "lab-policy-witness-1",
+          sign: (digest: Buffer) => signNode(null, digest, witnessKeys),
+        },
+      });
+      const report = await runPolicyWitnessSync(sql, {
+        submitChain: (submission) =>
+          core3.extendChain("policy", {
+            checkpointId: submission.checkpointId,
+            treeSize: submission.treeSize,
+            rootHash: submission.rootHash,
+            previousCheckpointId: submission.previousCheckpointId,
+            signerKeyId: submission.signerKeyId,
+          }),
+      });
+      expect(report.blocked).toBeNull();
+      expect(report.headsVerified).toBeGreaterThanOrEqual(1);
+
+      const detailResponse = await handlers8453.readConversationDetail(
+        authedRequest(
+          customer,
+          "GET",
+          `/v1/conversations/${activatedConversationId}`,
+        ),
+        activatedConversationId,
+      );
+      expect(detailResponse.status).toBe(200);
+      const detail = (await detailResponse.json()) as {
+        etag: string;
+        epoch: string;
+        rosterVersion: string;
+        confirmedTranscriptHash: string;
+        policyHead: {
+          policyHeadId: string;
+          policyHeadSequence: string;
+          policyHeadHash: string;
+          witnessState: string;
+        };
+      };
+      expect(detail.policyHead.witnessState).toBe("verified");
+
+      const send = async (
+        device: EnrolledDevice,
+        text: string,
+      ): Promise<{ status: number; body: Record<string, unknown> }> => {
+        const ciphertext = Buffer.from(text, "utf8").toString("base64url");
+        const path = `/v1/conversations/${activatedConversationId}/envelopes`;
+        const url = `${BASE}${path}`;
+        const response = await handlers8453.appendEnvelope(
+          new Request(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": MEDIA_TYPE,
+              "If-Match": detail.etag,
+              "Idempotency-Key": randomBytes(32).toString("base64url"),
+              Authorization: `DPoP ${device.accessToken}`,
+              DPoP: dpopProof(device, "POST", url),
+            },
+            body: JSON.stringify({
+              envelopeId: randomUUID(),
+              policyHeadId: detail.policyHead.policyHeadId,
+              policyHeadSequence: detail.policyHead.policyHeadSequence,
+              policyHeadHash: detail.policyHead.policyHeadHash,
+              expectedEpoch: detail.epoch,
+              expectedRosterVersion: detail.rosterVersion,
+              expectedConfirmedTranscriptHash: detail.confirmedTranscriptHash,
+              contentType:
+                "application/vnd.juicebox.messaging.mls-private-message",
+              ciphertext,
+              envelopeSha256: createHash("sha256")
+                .update(Buffer.from(ciphertext, "base64url"))
+                .digest("base64url"),
+              attachmentIds: [],
+            }),
+          }),
+          activatedConversationId,
+        );
+        return {
+          status: response.status,
+          body: (await response.json()) as Record<string, unknown>,
+        };
+      };
+
+      const fromCustomer = await send(customer, "opaque customer ciphertext");
+      if (fromCustomer.status !== 201) {
+        throw new Error(
+          `customer append refused: ${JSON.stringify(fromCustomer.body)}`,
+        );
+      }
+      expect(fromCustomer.body).toMatchObject({ status: "accepted" });
+
+      const fromStaff = await send(projectOwner, "opaque staff ciphertext");
+      if (fromStaff.status !== 201) {
+        throw new Error(
+          `staff append refused: ${JSON.stringify(fromStaff.body)}`,
+        );
+      }
+      expect(fromStaff.body).toMatchObject({ status: "accepted" });
+
+      const page = await handlers8453.readConversationEvents(
+        authedRequest(
+          customer,
+          "GET",
+          `/v1/conversations/${activatedConversationId}/events`,
+        ),
+        activatedConversationId,
+      );
+      expect(page.status).toBe(200);
+      const events = (await page.json()) as {
+        events: { position: string; envelopeClass: string }[];
+      };
+      expect(events.events.map((event) => event.envelopeClass)).toEqual([
+        "mls_commit",
+        "application",
+        "application",
+      ]);
+    } finally {
+      await witnessSql3.end({ timeout: 5 });
+    }
   });
 });
 

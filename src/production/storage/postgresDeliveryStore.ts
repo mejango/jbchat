@@ -52,6 +52,7 @@ import {
 import {
   computeApplicationAppendQuotaScopeHash,
   computeLockedApplicationAppendSnapshotDigest,
+  computePolicyHeadProofEvidenceDigest,
   parseApplicationAppendFanoutPlan,
   parseLockedApplicationAppendSnapshot,
   refreshLockedApplicationAppendAuthorizationSnapshot,
@@ -87,6 +88,7 @@ export interface PostgresDeliveryAppendStore {
   readonly atomicPersistence: AtomicDeliveryPersistencePort;
   readonly loadSnapshot: (
     conversationId: ConversationId,
+    sender?: { readonly installationId: string },
   ) => Promise<LockedApplicationAppendSnapshot>;
 }
 
@@ -297,6 +299,83 @@ async function reconstructAuthoritySnapshot(
     installationState: String(row.installation_state),
   }));
 
+  // The proof evidence digest commits to the SENDER's selected grant, so
+  // one stored column cannot serve every member. Once the head is
+  // witnessed the digest is derived per sender from the locked rows; the
+  // sender's custody fence binds the whole snapshot, so the derivation
+  // stays tamper-evident.
+  const proofEvidenceDigest =
+    String(h.witness_state) === "verified"
+      ? computePolicyHeadProofEvidenceDigest({
+          realmId: String(c.realm_id),
+          conversationGeneration: String(c.generation),
+          releaseTrustRootDigest: b64(
+            c.release_trust_root_digest as Uint8Array,
+          ),
+          purpose: "append-authorization",
+          releaseProfileId: String(c.release_profile_id),
+          deliveryLimitsDigest: b64(c.delivery_limits_digest as Uint8Array),
+          conversationId,
+          policyHeadId: String(h.policy_head_id),
+          policyHeadSequence: String(h.policy_head_sequence),
+          policyHeadHash: b64(h.policy_head_hash as Uint8Array),
+          deliveryLogPosition: String(h.delivery_log_position),
+          deliveryLogHeadHash: b64(h.delivery_log_head_hash as Uint8Array),
+          evaluationLogPosition: String(h.evaluation_log_position),
+          evaluationLogHeadHash: b64(h.evaluation_log_head_hash as Uint8Array),
+          epoch: String(h.epoch),
+          rosterVersion: String(h.roster_version),
+          confirmedTranscriptHash: b64(
+            h.confirmed_transcript_hash as Uint8Array,
+          ),
+          policyRevision: String(h.policy_revision),
+          mandatoryProposalCount: String(h.mandatory_proposal_count),
+          mandatoryProposalSetHash: b64(
+            h.mandatory_proposal_set_hash as Uint8Array,
+          ),
+          authorizedSendGrantSetHash: b64(
+            h.authorized_send_grant_set_hash as Uint8Array,
+          ),
+          selectedSendGrantEvidenceDigest: b64(
+            g.grant_evidence_digest as Uint8Array,
+          ),
+          selectedSendGrantInclusionEvidenceDigest: b64(
+            g.grant_inclusion_evidence_digest as Uint8Array,
+          ),
+          authorizedQuotaPolicyDigest: b64(
+            h.authorized_quota_policy_digest as Uint8Array,
+          ),
+          priorPolicyHeadSequence: String(h.prior_policy_head_sequence),
+          priorPolicyHeadHash: b64(h.prior_policy_head_hash as Uint8Array),
+          priorPolicyWitnessCheckpointId: String(
+            h.prior_policy_witness_checkpoint_id,
+          ),
+          priorPolicyWitnessEvidenceDigest: b64(
+            h.prior_policy_witness_evidence_digest as Uint8Array,
+          ),
+          signedBodySha256: b64(h.signed_body_sha256 as Uint8Array),
+          signerKeyId: String(h.signer_key_id),
+          signatureSha256: b64(h.signature_sha256 as Uint8Array),
+          witnessCheckpointId: String(h.witness_checkpoint_id),
+          witnessedPolicyHeadHash: b64(
+            h.witnessed_policy_head_hash as Uint8Array,
+          ),
+          witnessEvidenceDigest: b64(h.witness_evidence_digest as Uint8Array),
+          issuedAt: iso(h.issued_at as Date),
+          expiresAt: iso(h.expires_at as Date),
+          verifiedAt: iso(h.proof_verified_at as Date),
+          signatureStatus: "verified",
+          keyStatus: "valid-for-checkpoint",
+          witnessStatus: "verified",
+          freshnessStatus: "fresh",
+          currentStatus: "current",
+          policyConsistencyStatus: "verified",
+          policyConsistencyEvidenceDigest: b64(
+            h.policy_consistency_evidence_digest as Uint8Array,
+          ),
+          sendGrantInclusionStatus: "verified",
+        } as Parameters<typeof computePolicyHeadProofEvidenceDigest>[0])
+      : b64(h.proof_evidence_digest as Uint8Array);
   const snapshot = parseLockedApplicationAppendSnapshot({
     conversation: {
       realmId: String(c.realm_id),
@@ -354,7 +433,7 @@ async function reconstructAuthoritySnapshot(
       signerKeyId: String(h.signer_key_id),
       signatureSha256: b64(h.signature_sha256 as Uint8Array),
       witnessEvidenceDigest: b64(h.witness_evidence_digest as Uint8Array),
-      proofEvidenceDigest: b64(h.proof_evidence_digest as Uint8Array),
+      proofEvidenceDigest,
       policyConsistencyEvidenceDigest: b64(
         h.policy_consistency_evidence_digest as Uint8Array,
       ),
@@ -1543,9 +1622,10 @@ export function createPostgresDeliveryAppendStore(
     },
     loadSnapshot: async (
       conversationId: ConversationId,
+      sender?: { readonly installationId: string },
     ): Promise<LockedApplicationAppendSnapshot> => {
       const result = await sql.begin((tx) =>
-        loadAuthority(tx, conversationId, false),
+        loadAuthority(tx, conversationId, false, sender),
       );
       if (!result) {
         throw new Error("Delivery conversation authority row is missing.");

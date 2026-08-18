@@ -85,6 +85,16 @@ export function verifyFictionalDeliveryLabReceiptSignatureForTesting(
   }
 }
 
+export function fictionalDeliveryLabKeyPairForTesting(): {
+  readonly privateKey: import("node:crypto").KeyObject;
+  readonly publicKey: import("node:crypto").KeyObject;
+} {
+  return Object.freeze({
+    privateKey: FICTIONAL_DELIVERY_LAB_PRIVATE_KEY,
+    publicKey: FICTIONAL_DELIVERY_LAB_PUBLIC_KEY,
+  });
+}
+
 export function createFictionalDeliveryCryptoPorts(
   context: FictionalDeliveryCryptoContext,
 ): FictionalDeliveryCryptoPorts {

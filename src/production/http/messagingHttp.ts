@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { createHash, createPrivateKey, randomUUID, sign as signNode } from "node:crypto";
+import { createHash, createPrivateKey, createPublicKey, randomUUID, sign as signNode } from "node:crypto";
 import { readFileSync } from "node:fs";
 import postgres, { type Sql } from "postgres";
 import {
@@ -41,8 +41,23 @@ import {
 } from "../storage/membershipCommitStore";
 import {
   createConversationPlanStore,
+  serviceTrustContext,
   type ConversationPlanStore,
 } from "../storage/conversationPlanStore";
+import {
+  createPostgresDeliveryAppendStore,
+  type PostgresDeliveryAppendStore,
+} from "../storage/postgresDeliveryStore";
+import { createKeyedDeliveryCryptoPorts } from "../delivery/deliveryCryptoPorts";
+import {
+  APPLICATION_ENVELOPE_APPEND_ROUTE,
+  createApplicationEnvelopeDeliveryService,
+} from "../delivery/service";
+import { API_V1_MEDIA_TYPE } from "../delivery/valueObjects";
+import {
+  runPolicyWitnessSync,
+  type PolicyWitnessSubmitPort,
+} from "../witness/policyWitnessSync";
 import { readCallAtFinalized } from "../chain/quorumReads";
 import { computeKeyPackageRef } from "../identity/identityCrypto";
 import {
@@ -87,6 +102,11 @@ export interface MessagingHttpContext {
   readonly logSignerKeyId?: string;
   readonly replayGuard?: DpopReplayGuard;
   readonly chainRegistry?: ChainTransportRegistry;
+  readonly deliveryKeys?: {
+    readonly privateKey: import("node:crypto").KeyObject;
+    readonly publicKey: import("node:crypto").KeyObject;
+  };
+  readonly policyWitnessSubmit?: PolicyWitnessSubmitPort;
 }
 
 export interface MessagingHttpHandlers {
@@ -135,6 +155,15 @@ export interface MessagingHttpHandlers {
     request: Request,
     installationId: string,
   ) => Promise<Response>;
+  readonly appendEnvelope: (
+    request: Request,
+    conversationId: string,
+  ) => Promise<Response>;
+  readonly readConversationDetail: (
+    request: Request,
+    conversationId: string,
+  ) => Promise<Response>;
+  readonly policyWitnessSync: (request: Request) => Promise<Response>;
   readonly registerPushEndpoint: (
     request: Request,
     installationId: string,
@@ -198,6 +227,15 @@ export function createMessagingHttpHandlers(
     } | null;
     readonly plans: ConversationPlanStore | null;
     readonly chainRegistry: ChainTransportRegistry | null;
+    readonly deliveryStore: PostgresDeliveryAppendStore;
+    readonly appendKeys: {
+      readonly privateKey: import("node:crypto").KeyObject;
+      readonly publicKey: import("node:crypto").KeyObject;
+      readonly keyId: string;
+    } | null;
+    readonly trust: ReturnType<typeof serviceTrustContext> | null;
+    readonly policyWitnessSubmit: PolicyWitnessSubmitPort | null;
+    readonly internalSyncToken: string | null;
   }
   let cached: Wired | null = null;
 
@@ -272,6 +310,52 @@ export function createMessagingHttpHandlers(
       })(),
       chainRegistry:
         contextValue.chainRegistry ?? registryFromEndpoints(config.rpcEndpoints),
+      deliveryStore: createPostgresDeliveryAppendStore({
+        sql,
+        now: now as never,
+      }),
+      appendKeys: (() => {
+        const keyId = config.logSigner?.keyId ?? contextValue.logSignerKeyId;
+        if (!keyId) return null;
+        if (contextValue.deliveryKeys) {
+          return { ...contextValue.deliveryKeys, keyId };
+        }
+        if (!config.logSigner) return null;
+        const privateKey = createPrivateKey({
+          key: Buffer.concat([
+            Buffer.from("302e020100300506032b657004220420", "hex"),
+            config.logSigner.seed,
+          ]),
+          format: "der",
+          type: "pkcs8",
+        });
+        return { privateKey, publicKey: createPublicKey(privateKey), keyId };
+      })(),
+      trust: config.provisioningSeed
+        ? serviceTrustContext(config.provisioningSeed)
+        : null,
+      policyWitnessSubmit:
+        contextValue.policyWitnessSubmit ??
+        (process.env.JBM_WITNESS_URL && process.env.JBM_WITNESS_SUBMIT_TOKEN
+          ? {
+              submitChain: async (submission) => {
+                const response = await fetch(
+                  `${process.env.JBM_WITNESS_URL}/v1/witness/extensions`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${process.env.JBM_WITNESS_SUBMIT_TOKEN}`,
+                    },
+                    body: JSON.stringify(submission),
+                    signal: AbortSignal.timeout(15_000),
+                  },
+                );
+                return (await response.json()) as never;
+              },
+            }
+          : null),
+      internalSyncToken: process.env.JBM_INTERNAL_SYNC_TOKEN ?? null,
     };
     return cached;
   };
@@ -1023,6 +1107,237 @@ export function createMessagingHttpHandlers(
         if (inserted.length === 1) accepted.push(ref.toString("base64url"));
       }
       return jsonNoStore(201, { accepted });
+    },
+
+    async appendEnvelope(
+      request: Request,
+      conversationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.appendKeys || !wired.trust) return notFound();
+      if (!UUID_PATTERN.test(conversationId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const idempotencyKey = request.headers.get("idempotency-key");
+      const ifMatch = request.headers.get("if-match");
+      if (
+        !idempotencyKey ||
+        !/^[A-Za-z0-9_-]{43,64}$/.test(idempotencyKey) ||
+        !ifMatch
+      ) {
+        return problem(400, "malformed_request");
+      }
+      if (request.headers.get("content-type") !== MEDIA_TYPE) {
+        return problem(400, "malformed_request");
+      }
+      const rawText = await request.text();
+      if (Buffer.byteLength(rawText, "utf8") > 256 * 1024) {
+        return problem(400, "malformed_request");
+      }
+
+      const grants = await wired.sql`
+        SELECT g.credential_id, g.role_credential_id,
+               encode(rc.credential_fingerprint, 'base64') AS fingerprint,
+               rc.revocation_version
+        FROM conversation_send_grants g
+        JOIN role_credentials rc ON rc.credential_id = g.role_credential_id
+        WHERE g.conversation_id = ${conversationId}
+          AND g.installation_id = ${session.installationId}
+          AND g.state = 'active'`;
+      if (grants.length !== 1) return problem(403, "no_send_grant");
+
+      const keys = wired.appendKeys;
+      const validity = await wired.sql`
+        SELECT valid_from, valid_until FROM delivery_log_signing_keys
+        WHERE key_id = ${keys.keyId} AND state = 'active'`;
+      if (validity.length !== 1) return problem(503, "log_key_unavailable");
+
+      const nowIso = now();
+      const ports = {
+        ...createKeyedDeliveryCryptoPorts({
+          now: (() => now()) as never,
+          snapshot: () =>
+            wired.deliveryStore.loadSnapshot(conversationId as never, {
+              installationId: session.installationId,
+            }),
+          signingKeyId: keys.keyId as never,
+          signingKeyValidFrom: new Date(
+            validity[0].valid_from as Date,
+          ).toISOString() as never,
+          signingKeyValidUntil: new Date(
+            validity[0].valid_until as Date,
+          ).toISOString() as never,
+          privateKey: keys.privateKey,
+          publicKey: keys.publicKey,
+        }),
+        mlsCommitProjectionVerifier: {
+          verify: () =>
+            Promise.resolve({
+              status: "unavailable",
+              reasonCode: "not-configured",
+            }),
+        },
+        mlsExternalProposalVerifier: {
+          verify: () =>
+            Promise.resolve({
+              status: "unavailable",
+              reasonCode: "not-configured",
+            }),
+        },
+        conversationPolicyReplayVerifier: {
+          verify: () =>
+            Promise.resolve({
+              status: "unavailable",
+              reasonCode: "not-configured",
+            }),
+        },
+        conversationPageProofVerifier: {
+          verify: () =>
+            Promise.resolve({
+              status: "unavailable",
+              reasonCode: "not-configured",
+            }),
+        },
+        conversationLogHeadProofVerifier: {
+          verify: () =>
+            Promise.resolve({
+              status: "unavailable",
+              reasonCode: "not-configured",
+            }),
+        },
+        applicationAppendPreflight:
+          wired.deliveryStore.applicationAppendPreflight,
+        atomicPersistence: wired.deliveryStore.atomicPersistence,
+        clock: { now: (() => now()) as never },
+        conversationCursorCodec: wired.cursorCodec ?? {
+          decode: () =>
+            Promise.resolve({
+              status: "unavailable",
+              reasonCode: "not-configured",
+            }),
+          encode: () =>
+            Promise.resolve({
+              status: "unavailable",
+              reasonCode: "not-configured",
+            }),
+        },
+        invariantIncident: {
+          record: (incident: unknown) => {
+            console.error("DELIVERY INVARIANT INCIDENT", incident);
+            return Promise.resolve({ status: "recorded" });
+          },
+        },
+      };
+      const service = createApplicationEnvelopeDeliveryService(
+        ports as never,
+        {
+          realmId: wired.trust.realmId,
+          releaseProfileId: wired.trust.releaseProfileId,
+          releaseTrustRootDigest: wired.trust.releaseTrustRootDigest,
+          deliveryLimitsDigest: wired.trust.deliveryLimitsDigest,
+          deliveryLimits: wired.trust.deliveryLimits,
+        },
+      );
+      void nowIso;
+      const result = await service.appendApplicationEnvelope({
+        idempotencyKey,
+        authenticatedSender: {
+          type: "installation",
+          accountId: session.accountId,
+          installationId: session.installationId,
+        },
+        authenticatedCredentialId: String(grants[0].role_credential_id),
+        authenticatedCredentialFingerprint: Buffer.from(
+          String(grants[0].fingerprint).replace(/\s/g, ""),
+          "base64",
+        ).toString("base64url"),
+        authenticatedCredentialRevocationVersion: String(
+          grants[0].revocation_version,
+        ),
+        request: {
+          method: "POST",
+          routeTemplate: APPLICATION_ENVELOPE_APPEND_ROUTE,
+          resourceId: conversationId,
+          mediaType: API_V1_MEDIA_TYPE,
+          ifMatch,
+          rawBodyBytes: Buffer.from(rawText, "utf8"),
+          queryString: "",
+          contentEncoding: null,
+        },
+      } as never);
+      if (result.status === "accepted") return jsonNoStore(201, result);
+      if (result.status === "conflict") return jsonNoStore(409, result);
+      if (result.status === "rejected") return jsonNoStore(422, result);
+      return jsonNoStore(503, result);
+    },
+
+    async readConversationDetail(
+      request: Request,
+      conversationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      if (!UUID_PATTERN.test(conversationId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const rows = await wired.sql`
+        SELECT c.etag, c.epoch, c.roster_version, c.state, c.last_position,
+               encode(c.confirmed_transcript_hash, 'base64') AS transcript,
+               encode(c.group_id_hash, 'base64') AS group_id_hash,
+               c.release_profile_id,
+               a.policy_head_id, a.policy_head_sequence,
+               encode(a.policy_head_hash, 'base64') AS policy_head_hash,
+               a.witness_state
+        FROM memberships m
+        JOIN conversations c ON c.conversation_id = m.conversation_id
+        LEFT JOIN delivery_policy_head_anchors a
+          ON a.conversation_id = c.conversation_id
+        WHERE m.conversation_id = ${conversationId}
+          AND m.installation_id = ${session.installationId}`;
+      if (rows.length !== 1) return notFound();
+      const row = rows[0];
+      const b64u = (value: unknown) =>
+        Buffer.from(String(value).replace(/\s/g, ""), "base64").toString(
+          "base64url",
+        );
+      return jsonNoStore(200, {
+        conversationId,
+        etag: String(row.etag),
+        state: String(row.state),
+        epoch: String(row.epoch),
+        rosterVersion: String(row.roster_version),
+        lastPosition: String(row.last_position),
+        confirmedTranscriptHash: b64u(row.transcript),
+        groupIdHash: b64u(row.group_id_hash),
+        releaseProfileId: String(row.release_profile_id),
+        policyHead:
+          row.policy_head_id === null
+            ? null
+            : {
+                policyHeadId: String(row.policy_head_id),
+                policyHeadSequence: String(row.policy_head_sequence),
+                policyHeadHash: b64u(row.policy_head_hash),
+                witnessState: String(row.witness_state),
+              },
+      });
+    },
+
+    async policyWitnessSync(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.policyWitnessSubmit || !wired.internalSyncToken) {
+        return notFound();
+      }
+      const authorization = request.headers.get("authorization");
+      if (authorization !== `Bearer ${wired.internalSyncToken}`) {
+        return problem(401, "unauthorized");
+      }
+      const report = await runPolicyWitnessSync(
+        wired.sql,
+        wired.policyWitnessSubmit,
+      );
+      return jsonNoStore(200, report);
     },
 
     async registerPushEndpoint(
