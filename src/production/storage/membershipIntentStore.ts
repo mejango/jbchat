@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
 import type { Sql, TransactionSql } from "postgres";
 import { computeApplicationAppendMlsRosterHash } from "../delivery/state";
+import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
 
 const INTENT_TTL_MILLISECONDS = 5 * 60 * 1_000;
 const UUID_PATTERN =
@@ -367,6 +368,8 @@ export function createMembershipIntentStore(
         await tx`
           UPDATE conversations SET state = 'membership_pending'
           WHERE conversation_id = ${conversationId} AND state = 'active'`;
+        // State and pending-removal count are custody-fenced fields.
+        await refreshCustodySnapshotDigest(tx, conversationId);
         return Object.freeze({
           status: "created" as const,
           intentId,
@@ -412,6 +415,10 @@ export function createMembershipIntentStore(
             String(rows[0].conversation_id),
           );
         }
+        await refreshCustodySnapshotDigest(
+          tx,
+          String(rows[0].conversation_id),
+        );
         return Object.freeze({
           status: "resolved" as const,
           intentId,
@@ -428,6 +435,7 @@ export function createMembershipIntentStore(
           WHERE state IN ('requested', 'authorized', 'proposed')
             AND expires_at <= ${now}::timestamptz
           RETURNING intent_id, conversation_id, operation`;
+        const touched = new Set<string>();
         for (const row of expired) {
           if (String(row.operation) !== "remove") {
             await returnConversationToActiveIfClear(
@@ -435,6 +443,10 @@ export function createMembershipIntentStore(
               String(row.conversation_id),
             );
           }
+          touched.add(String(row.conversation_id));
+        }
+        for (const conversationId of touched) {
+          await refreshCustodySnapshotDigest(tx, conversationId);
         }
         return expired.length;
       });

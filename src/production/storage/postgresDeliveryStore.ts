@@ -118,6 +118,331 @@ interface StoredAcceptance {
  * must name ready, unbound attachments owned by the sending installation in
  * this conversation; finalize binds them to the accepted envelope.
  */
+const graphError = (component: string): Error =>
+  new Error(
+    `The relational authority graph is incomplete or ambiguous (${component}).`,
+  );
+
+/**
+ * Rebuilds the locked append-authority snapshot purely from the relational
+ * rows - no custody compare. loadAuthority wraps this with the digest fence;
+ * refreshCustodySnapshotDigest wraps it to rewrite the fence after a writer
+ * legitimately changes fenced fields (conversation state, positions,
+ * pending-removal count).
+ */
+async function reconstructAuthoritySnapshot(
+  tx: TransactionSql,
+  conversationId: ConversationId,
+  sender?: { readonly installationId: string },
+) {
+  const conversationRows = await tx`
+    SELECT * FROM conversations WHERE conversation_id = ${conversationId}`;
+  if (conversationRows.length !== 1) throw graphError("conversation");
+  const c = conversationRows[0];
+
+  const grantRows = sender
+    ? await tx`
+        SELECT * FROM conversation_send_grants
+        WHERE conversation_id = ${conversationId}
+          AND installation_id = ${sender.installationId}`
+    : await tx`
+        SELECT * FROM conversation_send_grants
+        WHERE conversation_id = ${conversationId}`;
+  if (grantRows.length !== 1) throw graphError("send-grant");
+  const g = grantRows[0];
+
+  const memberRows = await tx`
+    SELECT m.account_id, m.installation_id, m.credential_id,
+           m.joined_position, m.removed_position, rc.credential_fingerprint,
+           rc.revocation_version, rc.state AS credential_state,
+           rc.expires_at, i.status
+    FROM memberships m
+    JOIN role_credentials rc ON rc.credential_id = m.credential_id
+    JOIN installations i ON i.installation_id = m.installation_id
+    WHERE m.conversation_id = ${conversationId}
+      AND m.installation_id = ${String(g.installation_id)}`;
+  if (memberRows.length !== 1) throw graphError("membership");
+  const m = memberRows[0];
+
+  const headRows = await tx`
+    SELECT * FROM delivery_policy_head_anchors
+    WHERE conversation_id = ${conversationId}`;
+  if (headRows.length !== 1) throw graphError("policy-head");
+  const h = headRows[0];
+
+  const pendingRemovals = await tx`
+    SELECT count(*)::int AS total FROM membership_intents
+    WHERE conversation_id = ${conversationId} AND operation = 'remove'
+      AND state IN ('requested', 'authorized', 'proposed')`;
+
+  const usageRows = await tx`
+    SELECT * FROM conversation_usage
+    WHERE conversation_id = ${conversationId}`;
+  if (usageRows.length !== 1) throw graphError("usage");
+  const u = usageRows[0];
+
+  const bindingRows = await tx`
+    SELECT * FROM conversation_quota_bindings
+    WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
+  if (bindingRows.length === 0) throw graphError("quota-bindings");
+
+  const quotaBindings: Record<string, unknown>[] = [];
+  const quotas: Record<string, unknown>[] = [];
+  for (const binding of bindingRows) {
+    const identity = {
+      scope: String(binding.scope_type),
+      scopeHash: b64(binding.scope_hash as Uint8Array),
+      quotaName: String(binding.quota_name),
+      windowStartedAt: iso(binding.window_started_at as Date),
+      windowSeconds: String(binding.window_seconds),
+      operationLimit: String(binding.operation_limit),
+      byteLimit: String(binding.byte_limit),
+    };
+    quotaBindings.push(identity);
+    const counters = await tx`
+      SELECT operation_count, byte_count, reserved_operation_count,
+             reserved_byte_count, row_version
+      FROM quota_counters
+      WHERE scope_type = ${String(binding.scope_type)}
+        AND scope_hash = ${binding.scope_hash as Buffer}
+        AND quota_name = ${String(binding.quota_name)}
+        AND window_started_at = ${binding.window_started_at as Date}`;
+    if (counters.length !== 1) throw graphError("quota-counter");
+    const counter = counters[0];
+    const liveRows = await tx`
+      SELECT reservation_operation_count, reservation_byte_count
+      FROM application_append_quota_reservations
+      WHERE state = 'live' AND scope_type = ${String(binding.scope_type)}
+        AND scope_hash = ${binding.scope_hash as Buffer}
+        AND quota_name = ${String(binding.quota_name)}
+        AND window_started_at = ${binding.window_started_at as Date}`;
+    let liveOperations = 0n;
+    let liveBytes = 0n;
+    for (const live of liveRows) {
+      liveOperations += BigInt(String(live.reservation_operation_count));
+      liveBytes += BigInt(String(live.reservation_byte_count));
+    }
+    quotas.push({
+      ...identity,
+      operationCount: String(counter.operation_count),
+      byteCount: String(counter.byte_count),
+      reservedOperationCount: String(
+        BigInt(String(counter.reserved_operation_count)) - liveOperations,
+      ),
+      reservedByteCount: String(
+        BigInt(String(counter.reserved_byte_count)) - liveBytes,
+      ),
+      rowVersion: String(
+        BigInt(String(counter.row_version)) - BigInt(liveRows.length),
+      ),
+    });
+  }
+
+  const rosterRows = await tx`
+    SELECT * FROM conversation_roster_projections
+    WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
+  if (rosterRows.length === 0) throw graphError("roster-projection");
+  const roster = rosterRows.map((row) => ({
+    conversationId,
+    conversationGeneration: String(row.conversation_generation),
+    rosterVersion: String(row.roster_version),
+    accountId: String(row.account_id),
+    installationId: String(row.installation_id),
+    credentialId: String(row.credential_id),
+    credentialFingerprint: b64(row.credential_fingerprint as Uint8Array),
+  }));
+
+  const recipientRows = await tx`
+    SELECT * FROM conversation_recipient_projections
+    WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
+  if (recipientRows.length === 0) throw graphError("recipient-projection");
+  const recipients = recipientRows.map((row) => ({
+    conversationId,
+    conversationGeneration: String(row.conversation_generation),
+    recipientSetVersion: String(row.recipient_set_version),
+    accountId: String(row.account_id),
+    installationId: String(row.installation_id),
+    credentialId: String(row.credential_id),
+    credentialFingerprint: b64(row.credential_fingerprint as Uint8Array),
+    credentialRevocationVersion: String(row.credential_revocation_version),
+    credentialState: String(row.credential_state),
+    credentialExpiresAt: iso(row.credential_expires_at as Date),
+    joinedPosition: String(row.joined_position),
+    removedPosition:
+      row.removed_position === null ? null : String(row.removed_position),
+    installationState: String(row.installation_state),
+  }));
+
+  const snapshot = parseLockedApplicationAppendSnapshot({
+    conversation: {
+      realmId: String(c.realm_id),
+      conversationId,
+      projectScopeId: String(c.project_scope_id),
+      tenantScopeId: String(c.tenant_scope_id),
+      kind: String(c.delivery_purpose),
+      generation: String(c.generation),
+      releaseProfileId: String(c.release_profile_id),
+      deliveryLimitsDigest: b64(c.delivery_limits_digest as Uint8Array),
+      releaseTrustRootDigest: b64(c.release_trust_root_digest as Uint8Array),
+      quotaPolicyDigest: b64(c.quota_policy_digest as Uint8Array),
+      groupIdHash: b64(c.group_id_hash as Uint8Array),
+      state: String(c.state),
+      etag: String(c.etag),
+      epoch: String(c.epoch),
+      rosterVersion: String(c.roster_version),
+      rosterHash: b64(c.roster_hash as Uint8Array),
+      recipientSetVersion: String(c.recipient_set_version),
+      recipientSetHash: b64(c.recipient_set_hash as Uint8Array),
+      confirmedTranscriptHash: b64(c.confirmed_transcript_hash as Uint8Array),
+      lastPosition: String(c.last_position),
+      currentLogHeadHash: b64(c.current_log_head_hash as Uint8Array),
+      currentPolicyHeadSequence: String(c.last_policy_head_sequence),
+      currentPolicyHeadHash: b64(c.current_policy_head_hash as Uint8Array),
+    },
+    membership: {
+      conversationId,
+      accountId: String(m.account_id),
+      installationId: String(m.installation_id),
+      credentialId: String(m.credential_id),
+      credentialFingerprint: b64(m.credential_fingerprint as Uint8Array),
+      credentialRevocationVersion: String(m.revocation_version),
+      installationState: String(m.status),
+      credentialState: String(m.credential_state),
+      credentialExpiresAt: iso(m.expires_at as Date),
+      joinedPosition: String(m.joined_position),
+      removedPosition:
+        m.removed_position === null ? null : String(m.removed_position),
+    },
+    policyHead: {
+      policyHeadId: String(h.policy_head_id),
+      conversationId,
+      policyHeadSequence: String(h.policy_head_sequence),
+      policyHeadHash: b64(h.policy_head_hash as Uint8Array),
+      deliveryLogPosition: String(h.delivery_log_position),
+      deliveryLogHeadHash: b64(h.delivery_log_head_hash as Uint8Array),
+      evaluationLogPosition: String(h.evaluation_log_position),
+      evaluationLogHeadHash: b64(h.evaluation_log_head_hash as Uint8Array),
+      epoch: String(h.epoch),
+      rosterVersion: String(h.roster_version),
+      confirmedTranscriptHash: b64(h.confirmed_transcript_hash as Uint8Array),
+      policyRevision: String(h.policy_revision),
+      signedBodySha256: b64(h.signed_body_sha256 as Uint8Array),
+      signerKeyId: String(h.signer_key_id),
+      signatureSha256: b64(h.signature_sha256 as Uint8Array),
+      witnessEvidenceDigest: b64(h.witness_evidence_digest as Uint8Array),
+      proofEvidenceDigest: b64(h.proof_evidence_digest as Uint8Array),
+      policyConsistencyEvidenceDigest: b64(
+        h.policy_consistency_evidence_digest as Uint8Array,
+      ),
+      proofVerifiedAt: iso(h.proof_verified_at as Date),
+      issuedAt: iso(h.issued_at as Date),
+      expiresAt: iso(h.expires_at as Date),
+      witnessState: String(h.witness_state),
+      witnessCheckpointId:
+        h.witness_checkpoint_id === null
+          ? null
+          : String(h.witness_checkpoint_id),
+      witnessedPolicyHeadHash:
+        h.witnessed_policy_head_hash === null
+          ? null
+          : b64(h.witnessed_policy_head_hash as Uint8Array),
+      mandatoryProposalCount: String(h.mandatory_proposal_count),
+      mandatoryProposalSetHash: b64(
+        h.mandatory_proposal_set_hash as Uint8Array,
+      ),
+      authorizedSendGrantSetHash: b64(
+        h.authorized_send_grant_set_hash as Uint8Array,
+      ),
+      selectedSendGrantEvidenceDigest: b64(
+        h.selected_send_grant_evidence_digest as Uint8Array,
+      ),
+      selectedSendGrantInclusionEvidenceDigest: b64(
+        h.selected_send_grant_inclusion_evidence_digest as Uint8Array,
+      ),
+      authorizedQuotaPolicyDigest: b64(
+        h.authorized_quota_policy_digest as Uint8Array,
+      ),
+      priorPolicyHeadSequence: String(h.prior_policy_head_sequence),
+      priorPolicyHeadHash: b64(h.prior_policy_head_hash as Uint8Array),
+      priorPolicyWitnessCheckpointId: String(
+        h.prior_policy_witness_checkpoint_id,
+      ),
+      priorPolicyWitnessEvidenceDigest: b64(
+        h.prior_policy_witness_evidence_digest as Uint8Array,
+      ),
+    },
+    sendGrant: {
+      conversationId,
+      installationId: String(g.installation_id),
+      credentialId: String(g.credential_id),
+      conversationKind: String(g.conversation_kind),
+      conversationGeneration: String(g.conversation_generation),
+      role: String(g.role),
+      roleCredentialId: String(g.role_credential_id),
+      roleCredentialFingerprint: b64(
+        g.role_credential_fingerprint as Uint8Array,
+      ),
+      roleCredentialSubjectAccountId: String(
+        g.role_credential_subject_account_id,
+      ),
+      roleCredentialSubjectInstallationId: String(
+        g.role_credential_subject_installation_id,
+      ),
+      roleCredentialValidFrom: iso(g.role_credential_valid_from as Date),
+      roleCredentialValidUntil: iso(g.role_credential_valid_until as Date),
+      capability: String(g.capability),
+      state: String(g.state),
+      policyRevision: String(g.policy_revision),
+      policyHeadSequence: String(g.policy_head_sequence),
+      policyHeadHash: b64(g.policy_head_hash as Uint8Array),
+      expiresAt: iso(g.expires_at as Date),
+      grantEvidenceDigest: b64(g.grant_evidence_digest as Uint8Array),
+      grantInclusionEvidenceDigest: b64(
+        g.grant_inclusion_evidence_digest as Uint8Array,
+      ),
+    },
+    pendingRemovalCount: String(pendingRemovals[0].total),
+    usage: {
+      conversationId,
+      envelopeCount: String(u.envelope_count),
+      envelopeBytes: String(u.envelope_bytes),
+      attachmentBytes: String(u.attachment_bytes),
+      envelopeCountLimit: String(u.envelope_count_limit),
+      envelopeBytesLimit: String(u.envelope_bytes_limit),
+      attachmentBytesLimit: String(u.attachment_bytes_limit),
+    },
+    quotaBindings,
+    quotas,
+  });
+  const snapshotDigest = computeLockedApplicationAppendSnapshotDigest(snapshot);
+  return { snapshot, snapshotDigest, roster, recipients };
+}
+
+/**
+ * Recomputes and rewrites the custody snapshot digest after a transaction
+ * mutated fenced fields outside the application-append finalize path
+ * (membership intents, external proposals). No-op when the conversation has
+ * no custody row. Must run inside the same transaction as the mutation.
+ */
+export async function refreshCustodySnapshotDigest(
+  tx: TransactionSql,
+  conversationId: string,
+): Promise<void> {
+  const custody = await tx`
+    SELECT conversation_id FROM delivery_conversation_authority
+    WHERE conversation_id = ${conversationId} FOR UPDATE`;
+  if (custody.length === 0) return;
+  const rebuilt = await reconstructAuthoritySnapshot(
+    tx,
+    conversationId as ConversationId,
+  );
+  await tx`
+    UPDATE delivery_conversation_authority SET
+      snapshot_digest = ${bytea(rebuilt.snapshotDigest)},
+      row_version = row_version + 1
+    WHERE conversation_id = ${conversationId}`;
+}
+
 export function createPostgresDeliveryAppendStore(
   context: PostgresDeliveryStoreContext,
 ): PostgresDeliveryAppendStore {
@@ -127,11 +452,6 @@ export function createPostgresDeliveryAppendStore(
     const rows = await tx`SELECT delivery_db_now() AS db_now`;
     return iso(rows[0].db_now as Date);
   };
-
-  const graphError = (component: string): Error =>
-    new Error(
-      `The relational authority graph is incomplete or ambiguous (${component}).`,
-    );
 
   /**
    * Reconstructs the locked append-authority snapshot from the relational
@@ -165,286 +485,8 @@ export function createPostgresDeliveryAppendStore(
     if (custody.length === 0) return null;
     const custodyRow = custody[0];
 
-    const conversationRows = await tx`
-      SELECT * FROM conversations WHERE conversation_id = ${conversationId}`;
-    if (conversationRows.length !== 1) throw graphError("conversation");
-    const c = conversationRows[0];
-
-    const grantRows = sender
-      ? await tx`
-          SELECT * FROM conversation_send_grants
-          WHERE conversation_id = ${conversationId}
-            AND installation_id = ${sender.installationId}`
-      : await tx`
-          SELECT * FROM conversation_send_grants
-          WHERE conversation_id = ${conversationId}`;
-    if (grantRows.length !== 1) throw graphError("send-grant");
-    const g = grantRows[0];
-
-    const memberRows = await tx`
-      SELECT m.account_id, m.installation_id, m.credential_id,
-             m.joined_position, m.removed_position, rc.credential_fingerprint,
-             rc.revocation_version, rc.state AS credential_state,
-             rc.expires_at, i.status
-      FROM memberships m
-      JOIN role_credentials rc ON rc.credential_id = m.credential_id
-      JOIN installations i ON i.installation_id = m.installation_id
-      WHERE m.conversation_id = ${conversationId}
-        AND m.installation_id = ${String(g.installation_id)}`;
-    if (memberRows.length !== 1) throw graphError("membership");
-    const m = memberRows[0];
-
-    const headRows = await tx`
-      SELECT * FROM delivery_policy_head_anchors
-      WHERE conversation_id = ${conversationId}`;
-    if (headRows.length !== 1) throw graphError("policy-head");
-    const h = headRows[0];
-
-    const pendingRemovals = await tx`
-      SELECT count(*)::int AS total FROM membership_intents
-      WHERE conversation_id = ${conversationId} AND operation = 'remove'
-        AND state IN ('requested', 'authorized', 'proposed')`;
-
-    const usageRows = await tx`
-      SELECT * FROM conversation_usage
-      WHERE conversation_id = ${conversationId}`;
-    if (usageRows.length !== 1) throw graphError("usage");
-    const u = usageRows[0];
-
-    const bindingRows = await tx`
-      SELECT * FROM conversation_quota_bindings
-      WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
-    if (bindingRows.length === 0) throw graphError("quota-bindings");
-
-    const quotaBindings: Record<string, unknown>[] = [];
-    const quotas: Record<string, unknown>[] = [];
-    for (const binding of bindingRows) {
-      const identity = {
-        scope: String(binding.scope_type),
-        scopeHash: b64(binding.scope_hash as Uint8Array),
-        quotaName: String(binding.quota_name),
-        windowStartedAt: iso(binding.window_started_at as Date),
-        windowSeconds: String(binding.window_seconds),
-        operationLimit: String(binding.operation_limit),
-        byteLimit: String(binding.byte_limit),
-      };
-      quotaBindings.push(identity);
-      const counters = await tx`
-        SELECT operation_count, byte_count, reserved_operation_count,
-               reserved_byte_count, row_version
-        FROM quota_counters
-        WHERE scope_type = ${String(binding.scope_type)}
-          AND scope_hash = ${binding.scope_hash as Buffer}
-          AND quota_name = ${String(binding.quota_name)}
-          AND window_started_at = ${binding.window_started_at as Date}`;
-      if (counters.length !== 1) throw graphError("quota-counter");
-      const counter = counters[0];
-      const liveRows = await tx`
-        SELECT reservation_operation_count, reservation_byte_count
-        FROM application_append_quota_reservations
-        WHERE state = 'live' AND scope_type = ${String(binding.scope_type)}
-          AND scope_hash = ${binding.scope_hash as Buffer}
-          AND quota_name = ${String(binding.quota_name)}
-          AND window_started_at = ${binding.window_started_at as Date}`;
-      let liveOperations = 0n;
-      let liveBytes = 0n;
-      for (const live of liveRows) {
-        liveOperations += BigInt(String(live.reservation_operation_count));
-        liveBytes += BigInt(String(live.reservation_byte_count));
-      }
-      quotas.push({
-        ...identity,
-        operationCount: String(counter.operation_count),
-        byteCount: String(counter.byte_count),
-        reservedOperationCount: String(
-          BigInt(String(counter.reserved_operation_count)) - liveOperations,
-        ),
-        reservedByteCount: String(
-          BigInt(String(counter.reserved_byte_count)) - liveBytes,
-        ),
-        rowVersion: String(
-          BigInt(String(counter.row_version)) - BigInt(liveRows.length),
-        ),
-      });
-    }
-
-    const rosterRows = await tx`
-      SELECT * FROM conversation_roster_projections
-      WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
-    if (rosterRows.length === 0) throw graphError("roster-projection");
-    const roster = rosterRows.map((row) => ({
-      conversationId,
-      conversationGeneration: String(row.conversation_generation),
-      rosterVersion: String(row.roster_version),
-      accountId: String(row.account_id),
-      installationId: String(row.installation_id),
-      credentialId: String(row.credential_id),
-      credentialFingerprint: b64(row.credential_fingerprint as Uint8Array),
-    }));
-
-    const recipientRows = await tx`
-      SELECT * FROM conversation_recipient_projections
-      WHERE conversation_id = ${conversationId} ORDER BY ordinal`;
-    if (recipientRows.length === 0) throw graphError("recipient-projection");
-    const recipients = recipientRows.map((row) => ({
-      conversationId,
-      conversationGeneration: String(row.conversation_generation),
-      recipientSetVersion: String(row.recipient_set_version),
-      accountId: String(row.account_id),
-      installationId: String(row.installation_id),
-      credentialId: String(row.credential_id),
-      credentialFingerprint: b64(row.credential_fingerprint as Uint8Array),
-      credentialRevocationVersion: String(row.credential_revocation_version),
-      credentialState: String(row.credential_state),
-      credentialExpiresAt: iso(row.credential_expires_at as Date),
-      joinedPosition: String(row.joined_position),
-      removedPosition:
-        row.removed_position === null ? null : String(row.removed_position),
-      installationState: String(row.installation_state),
-    }));
-
-    const snapshot = parseLockedApplicationAppendSnapshot({
-      conversation: {
-        realmId: String(c.realm_id),
-        conversationId,
-        projectScopeId: String(c.project_scope_id),
-        tenantScopeId: String(c.tenant_scope_id),
-        kind: String(c.delivery_purpose),
-        generation: String(c.generation),
-        releaseProfileId: String(c.release_profile_id),
-        deliveryLimitsDigest: b64(c.delivery_limits_digest as Uint8Array),
-        releaseTrustRootDigest: b64(c.release_trust_root_digest as Uint8Array),
-        quotaPolicyDigest: b64(c.quota_policy_digest as Uint8Array),
-        groupIdHash: b64(c.group_id_hash as Uint8Array),
-        state: String(c.state),
-        etag: String(c.etag),
-        epoch: String(c.epoch),
-        rosterVersion: String(c.roster_version),
-        rosterHash: b64(c.roster_hash as Uint8Array),
-        recipientSetVersion: String(c.recipient_set_version),
-        recipientSetHash: b64(c.recipient_set_hash as Uint8Array),
-        confirmedTranscriptHash: b64(c.confirmed_transcript_hash as Uint8Array),
-        lastPosition: String(c.last_position),
-        currentLogHeadHash: b64(c.current_log_head_hash as Uint8Array),
-        currentPolicyHeadSequence: String(c.last_policy_head_sequence),
-        currentPolicyHeadHash: b64(c.current_policy_head_hash as Uint8Array),
-      },
-      membership: {
-        conversationId,
-        accountId: String(m.account_id),
-        installationId: String(m.installation_id),
-        credentialId: String(m.credential_id),
-        credentialFingerprint: b64(m.credential_fingerprint as Uint8Array),
-        credentialRevocationVersion: String(m.revocation_version),
-        installationState: String(m.status),
-        credentialState: String(m.credential_state),
-        credentialExpiresAt: iso(m.expires_at as Date),
-        joinedPosition: String(m.joined_position),
-        removedPosition:
-          m.removed_position === null ? null : String(m.removed_position),
-      },
-      policyHead: {
-        policyHeadId: String(h.policy_head_id),
-        conversationId,
-        policyHeadSequence: String(h.policy_head_sequence),
-        policyHeadHash: b64(h.policy_head_hash as Uint8Array),
-        deliveryLogPosition: String(h.delivery_log_position),
-        deliveryLogHeadHash: b64(h.delivery_log_head_hash as Uint8Array),
-        evaluationLogPosition: String(h.evaluation_log_position),
-        evaluationLogHeadHash: b64(h.evaluation_log_head_hash as Uint8Array),
-        epoch: String(h.epoch),
-        rosterVersion: String(h.roster_version),
-        confirmedTranscriptHash: b64(h.confirmed_transcript_hash as Uint8Array),
-        policyRevision: String(h.policy_revision),
-        signedBodySha256: b64(h.signed_body_sha256 as Uint8Array),
-        signerKeyId: String(h.signer_key_id),
-        signatureSha256: b64(h.signature_sha256 as Uint8Array),
-        witnessEvidenceDigest: b64(h.witness_evidence_digest as Uint8Array),
-        proofEvidenceDigest: b64(h.proof_evidence_digest as Uint8Array),
-        policyConsistencyEvidenceDigest: b64(
-          h.policy_consistency_evidence_digest as Uint8Array,
-        ),
-        proofVerifiedAt: iso(h.proof_verified_at as Date),
-        issuedAt: iso(h.issued_at as Date),
-        expiresAt: iso(h.expires_at as Date),
-        witnessState: String(h.witness_state),
-        witnessCheckpointId:
-          h.witness_checkpoint_id === null
-            ? null
-            : String(h.witness_checkpoint_id),
-        witnessedPolicyHeadHash:
-          h.witnessed_policy_head_hash === null
-            ? null
-            : b64(h.witnessed_policy_head_hash as Uint8Array),
-        mandatoryProposalCount: String(h.mandatory_proposal_count),
-        mandatoryProposalSetHash: b64(
-          h.mandatory_proposal_set_hash as Uint8Array,
-        ),
-        authorizedSendGrantSetHash: b64(
-          h.authorized_send_grant_set_hash as Uint8Array,
-        ),
-        selectedSendGrantEvidenceDigest: b64(
-          h.selected_send_grant_evidence_digest as Uint8Array,
-        ),
-        selectedSendGrantInclusionEvidenceDigest: b64(
-          h.selected_send_grant_inclusion_evidence_digest as Uint8Array,
-        ),
-        authorizedQuotaPolicyDigest: b64(
-          h.authorized_quota_policy_digest as Uint8Array,
-        ),
-        priorPolicyHeadSequence: String(h.prior_policy_head_sequence),
-        priorPolicyHeadHash: b64(h.prior_policy_head_hash as Uint8Array),
-        priorPolicyWitnessCheckpointId: String(
-          h.prior_policy_witness_checkpoint_id,
-        ),
-        priorPolicyWitnessEvidenceDigest: b64(
-          h.prior_policy_witness_evidence_digest as Uint8Array,
-        ),
-      },
-      sendGrant: {
-        conversationId,
-        installationId: String(g.installation_id),
-        credentialId: String(g.credential_id),
-        conversationKind: String(g.conversation_kind),
-        conversationGeneration: String(g.conversation_generation),
-        role: String(g.role),
-        roleCredentialId: String(g.role_credential_id),
-        roleCredentialFingerprint: b64(
-          g.role_credential_fingerprint as Uint8Array,
-        ),
-        roleCredentialSubjectAccountId: String(
-          g.role_credential_subject_account_id,
-        ),
-        roleCredentialSubjectInstallationId: String(
-          g.role_credential_subject_installation_id,
-        ),
-        roleCredentialValidFrom: iso(g.role_credential_valid_from as Date),
-        roleCredentialValidUntil: iso(g.role_credential_valid_until as Date),
-        capability: String(g.capability),
-        state: String(g.state),
-        policyRevision: String(g.policy_revision),
-        policyHeadSequence: String(g.policy_head_sequence),
-        policyHeadHash: b64(g.policy_head_hash as Uint8Array),
-        expiresAt: iso(g.expires_at as Date),
-        grantEvidenceDigest: b64(g.grant_evidence_digest as Uint8Array),
-        grantInclusionEvidenceDigest: b64(
-          g.grant_inclusion_evidence_digest as Uint8Array,
-        ),
-      },
-      pendingRemovalCount: String(pendingRemovals[0].total),
-      usage: {
-        conversationId,
-        envelopeCount: String(u.envelope_count),
-        envelopeBytes: String(u.envelope_bytes),
-        attachmentBytes: String(u.attachment_bytes),
-        envelopeCountLimit: String(u.envelope_count_limit),
-        envelopeBytesLimit: String(u.envelope_bytes_limit),
-        attachmentBytesLimit: String(u.attachment_bytes_limit),
-      },
-      quotaBindings,
-      quotas,
-    });
-    const snapshotDigest = computeLockedApplicationAppendSnapshotDigest(snapshot);
+    const rebuilt = await reconstructAuthoritySnapshot(tx, conversationId, sender);
+    const { snapshot, snapshotDigest, roster, recipients } = rebuilt;
     if (snapshotDigest !== b64(custodyRow.snapshot_digest)) {
       throw new Error(
         "Reconstructed authority snapshot does not match the custody digest fence.",

@@ -18,6 +18,7 @@ import {
   createMembershipIntentStore,
   type MembershipIntentStore,
 } from "./membershipIntentStore";
+import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
 import { setDeliveryLabClock } from "./postgresDeliveryLab.testing";
 
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
@@ -177,14 +178,18 @@ describeStorage("membership intents", () => {
   });
 
   afterAll(async () => {
-    // Restore the shared conversation so later drills can append again.
-    await sql`
-      UPDATE membership_intents SET state = 'cancelled'
-      WHERE conversation_id = ${LAB_CONVERSATION_ID}
-        AND state IN ('requested', 'authorized', 'proposed')`;
-    await sql`
-      UPDATE conversations SET state = 'active'
-      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    // Restore the shared conversation so later drills can append again; the
+    // fence must be rewritten alongside any fenced-field change.
+    await sql.begin(async (tx) => {
+      await tx`
+        UPDATE membership_intents SET state = 'cancelled'
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}
+          AND state IN ('requested', 'authorized', 'proposed')`;
+      await tx`
+        UPDATE conversations SET state = 'active'
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+      await refreshCustodySnapshotDigest(tx, LAB_CONVERSATION_ID);
+    });
     await sql?.end({ timeout: 5 });
   });
 
@@ -206,8 +211,29 @@ describeStorage("membership intents", () => {
       reasonCode: "grant-required",
     });
 
+    const [custodyBefore] = await sql`
+      SELECT row_version, snapshot_digest
+      FROM delivery_conversation_authority
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+
     const created = await store.createIntent(addInput());
     expect(created.status).toBe("created");
+
+    // The state flip is a custody-fenced field: the digest must be rewritten
+    // in the same transaction or the append lane fails on a stale fence.
+    const [custodyAfter] = await sql`
+      SELECT row_version, snapshot_digest
+      FROM delivery_conversation_authority
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(Number(custodyAfter.row_version)).toBe(
+      Number(custodyBefore.row_version) + 1,
+    );
+    expect(
+      Buffer.compare(
+        custodyAfter.snapshot_digest as Buffer,
+        custodyBefore.snapshot_digest as Buffer,
+      ),
+    ).not.toBe(0);
     if (created.status !== "created") throw new Error("intent refused");
     expect(created.takenKeyPackage).not.toBeNull();
     expect(created.authorizedCommitterInstallationIds).toEqual([
@@ -287,9 +313,12 @@ describeStorage("membership intents", () => {
   it("refuses mismatched grants and unknown targets", async () => {
     // The expired removal from the previous test left the conversation
     // pending on purpose; clear it so refusal precedence is observable.
-    await sql`
-      UPDATE conversations SET state = 'active'
-      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    await sql.begin(async (tx) => {
+      await tx`
+        UPDATE conversations SET state = 'active'
+        WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+      await refreshCustodySnapshotDigest(tx, LAB_CONVERSATION_ID);
+    });
     await expect(
       store.createIntent(
         addInput({
