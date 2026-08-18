@@ -19,6 +19,18 @@ const children = [
     [join(here, "submit-witness-extensions.mjs")],
     { env: { ...process.env, JBM_KEEPER_LOOP_SECONDS: "15" }, stdio: "inherit" },
   ),
+  ...(process.env.JBM_VAPID_PRIVATE_KEY
+    ? [
+        spawn(
+          process.execPath,
+          [join(here, "send-push-wakeups.mjs")],
+          {
+            env: { ...process.env, JBM_KEEPER_LOOP_SECONDS: "15" },
+            stdio: "inherit",
+          },
+        ),
+      ]
+    : []),
 ];
 for (const child of children) {
   child.on("exit", (code) => {
