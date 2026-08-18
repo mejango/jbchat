@@ -1068,7 +1068,7 @@ export function parseEncodedConversationCursor(
   return value;
 }
 
-function parseConversationCursorClaims(
+export function parseConversationCursorClaims(
   value: unknown,
   expected: {
     encodedCursor: string;
