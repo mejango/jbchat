@@ -67,10 +67,17 @@ codeable item.
       session read/delete, replay collapse) is proven against PostgreSQL in
       the storage lab's embedBff suite. Remaining for a real integration:
       run the redeemed path in a deployed browser with a configured plane.
-- [ ] Host SDK stub + launcher contract per embed-contract.md
+- [x] Unit 8 (c3834e0): supported host SDK (createEmbedHost) — fixed
+      sandbox iframe construction, listener-before-frame, exact-origin
+      postMessage, one-use handle custody, fail-closed channel; 6 behavioral
+      unit tests through the real protocol gates.
 
-## Phase 4 — identity & chain authority
-- [ ] SIWE device sessions against production stores + signature verifiers
+## Phase 4 — identity & chain authority (NEXT)
+- [ ] SIWE device sessions against the enrollment/auth_sessions tables +
+      signature verifiers. Needs an EVM signature dependency decision
+      (recommend @noble/secp256k1 or @noble/curves — zero/minimal-dep,
+      audited) for EIP-191 recovery; same supply-chain discipline as the
+      postgres pin.
 - [ ] Finalized Juicebox receipt verification over pinned deployments
 
 ## Phase 5 — Candidate B (XMTP) harness
