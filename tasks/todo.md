@@ -87,7 +87,19 @@ codeable item.
       9 offline crypto tests (incl. known priv-1 address vector) + 8 pgtest
       scenarios in the storage lab. ERC-1271/6492 verification and DPoP/HTTP
       enforcement remain launch work needing real chain adapters.
-- [ ] Finalized Juicebox receipt verification over pinned deployments
+- [x] Finalized Juicebox receipt verification over pinned deployments
+      (d08d31a): `src/production/entitlement/` — signed Ed25519 deployment
+      manifest (strict parse + exact-signature verify + fail-closed
+      resolution into CanonicalPurchaseDeploymentExpectation) and the
+      eligibility_grants transaction per storage-and-retention §eligibility:
+      verified-parsed receipt + locked project ref/policy/wallet link/active
+      installation/ratified active finality profile → five-minute lease with
+      finality anchor + evidence digest; claim handles HMAC-only at rest;
+      suspend-on-finality-loss, revoke-on-orphaned-anchor, terminal expiry
+      sweep. Every non-verified outcome writes no row. Real RPC quorum
+      adapters (ChainFinalityVerifierPort / CanonicalPurchaseVerifierPort)
+      stay fail-closed unavailable until finality profiles are ratified
+      (ENG-004) and a production manifest is signed — launch work, not code.
 
 ## Phase 5 — Candidate B (XMTP) harness
 - [ ] Run the provider-neutral G1 harness against XMTP SDK; record comparative
