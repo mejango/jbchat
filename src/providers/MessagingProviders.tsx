@@ -13,7 +13,9 @@ import {
   optimismSepolia,
   sepolia,
 } from "wagmi/chains";
-import { coinbaseWallet, injected, walletConnect } from "wagmi/connectors";
+import { injected } from "@wagmi/core";
+import { coinbaseWallet } from "wagmi/connectors/coinbaseWallet";
+import { walletConnect } from "wagmi/connectors/walletConnect";
 
 export const SUPPORTED_CHAINS = [
   mainnet,
