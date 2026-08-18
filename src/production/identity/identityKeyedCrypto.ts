@@ -12,6 +12,8 @@ export interface IdentityKeyedCryptoPort {
   readonly hmacChallengeNonce: (nonce: string) => Buffer;
   readonly hmacAccessToken: (token: string) => Buffer;
   readonly hmacRefreshToken: (token: string) => Buffer;
+  readonly hmacEligibilityClaimHandle: (handle: string) => Buffer;
+  readonly hmacEligibilitySubject: (caip10: string) => Buffer;
   readonly sealPayload: (plaintext: string) => {
     readonly ciphertext: Buffer;
     readonly kmsKeyVersion: string;
@@ -24,6 +26,8 @@ const RESULT_HANDLE_DOMAIN = "jbm-identity-enrollment-result-handle/v1";
 const CHALLENGE_NONCE_DOMAIN = "jbm-identity-challenge-nonce/v1";
 const ACCESS_TOKEN_DOMAIN = "jbm-identity-access-token/v1";
 const REFRESH_TOKEN_DOMAIN = "jbm-identity-refresh-token/v1";
+const ELIGIBILITY_CLAIM_HANDLE_DOMAIN = "jbm-eligibility-claim-handle/v1";
+const ELIGIBILITY_SUBJECT_DOMAIN = "jbm-eligibility-subject/v1";
 const SEAL_KEY_DOMAIN = "jbm-identity-payload-seal-key/v1";
 
 export function createKeyedIdentityCrypto(
@@ -46,6 +50,10 @@ export function createKeyedIdentityCrypto(
     hmacChallengeNonce: (nonce: string) => keyed(CHALLENGE_NONCE_DOMAIN, nonce),
     hmacAccessToken: (token: string) => keyed(ACCESS_TOKEN_DOMAIN, token),
     hmacRefreshToken: (token: string) => keyed(REFRESH_TOKEN_DOMAIN, token),
+    hmacEligibilityClaimHandle: (handle: string) =>
+      keyed(ELIGIBILITY_CLAIM_HANDLE_DOMAIN, handle),
+    hmacEligibilitySubject: (caip10: string) =>
+      keyed(ELIGIBILITY_SUBJECT_DOMAIN, caip10),
     sealPayload: (plaintext: string) => {
       const iv = randomBytes(12);
       const cipher = createCipheriv("aes-256-gcm", sealKey, iv);

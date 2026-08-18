@@ -692,6 +692,7 @@ async function main() {
         "--config",
         "vitest.storage.config.ts",
         "src/production/identity/enrollment.pgtest.ts",
+        "src/production/entitlement/eligibility.pgtest.ts",
       ],
       {
         env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
