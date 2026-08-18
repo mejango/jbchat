@@ -253,11 +253,24 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       against the strict kernel parser; tier path not-configured), and
       the quorum wallet-proof verifier (EOA only; contract wallets
       unavailable). JBM_RPC_ENDPOINTS wires EOA enrollment live.
-- [ ] Then: eligibility purchase-claim HTTP route (needs a SIGNED
-      deployment manifest lane); append route (release-pinned verifier
-      adapters, spec-mandated unconfigured); push notifications;
-      KeyPackage publication + conversation planning routes; grant
-      recheck keeper (60s cadence per ADR 0005).
+- [x] Eligibility lane live end to end: manifest tooling (compose from
+      live finalized quorum reads + Ed25519 sign; real omnichain v6
+      addresses in config/deployment-manifest.source.json), POST
+      /v1/eligibility/purchase-claims (server-issued claims, one-time
+      handles), grant-recheck keeper script, lifecycle transitions
+      exported standalone. Lab proves purchase receipt -> grant ->
+      support-chat admission in one HTTP flow.
+- [x] DEPLOYED: jbm-delivery (app-production-bbdd.up.railway.app) +
+      jbm-witness (witness-production-3164.up.railway.app), both green:
+      migrations, seeded profiles, registered log key, all lanes
+      configured (RPC quorum Dwellir+drpc/Tenderly/base-official,
+      signed manifest inline). Operational facts in
+      docs/deploy/railway.md.
+- [ ] Then: keeper cron service on Railway (manual dashboard step);
+      delivery->witness checkpoint submission job; push notifications;
+      KeyPackage publication + conversation planning routes; append
+      route (release-pinned verifier adapters, spec-mandated
+      unconfigured); custom domains.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,
