@@ -1,5 +1,37 @@
 # Railway deployment (owner decision, 2026-08-18)
 
+DEPLOYED 2026-08-18 via `railway up` from the local tree (GitHub main is
+behind local until the owner pushes; do not connect GitHub auto-deploys
+before then):
+- jbm-delivery → https://app-production-bbdd.up.railway.app
+  (project 9fe30c94; migrations applied, ADR 0005 profiles seeded, the
+  delivery log signing key registered, every lane configured incl. RPC
+  quorum + signed deployment manifest).
+- jbm-witness → https://witness-production-3164.up.railway.app
+  (project e3354825; witness migrations applied; isolated keys).
+
+Operational facts learned during the first deploy:
+- The nixpacks image has no `psql`: set `NIXPACKS_PKGS=postgresql_16` on
+  BOTH services or the predeploy migration fails with no surfaced log.
+- Set `HOSTNAME=::` on both services - Docker injects the container ID
+  as HOSTNAME, the start script's `??=` keeps it, and Next then binds
+  the wrong interface (502 from the edge).
+- `JUICEBOX_MESSAGING_WEB_SECURITY_MODE=production`,
+  `JUICEBOX_MESSAGING_CANONICAL_ORIGIN=<https origin>`, and
+  `JUICEBOX_MESSAGING_EMBED_INTEGRATIONS={}` (an OBJECT keyed by
+  tenantPublicId, not an array) are required at build time.
+- One-time setup after first deploy, via
+  `railway ssh --service app "node scripts/storage/seed-finality-profiles.mjs"`
+  and `railway ssh --service app "node scripts/storage/register-log-signing-key.mjs"`.
+- Second RPC providers: publicnode 403s Node fetch (curl works) - the
+  quorum pairs Dwellir with drpc on mainnets/OP-Sepolia/Arb-Sepolia,
+  Tenderly gateway on Ethereum Sepolia, and sepolia.base.org on Base
+  Sepolia.
+- STILL MANUAL: the keeper cron (dashboard -> new service -> cron
+  `node scripts/keeper/recheck-grants.mjs`, 60s cadence) and the
+  delivery->witness checkpoint submission job (not yet built).
+
+
 Two Railway PROJECTS from this one repository — separation is the point,
 not an inconvenience. The witness must live in its own Railway project
 with its own members list, its own PostgreSQL, and its own secrets, so
