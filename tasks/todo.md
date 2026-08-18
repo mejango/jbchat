@@ -118,10 +118,20 @@ do not exist for Candidate A either.
       1k kills/point, 5k mutations — all passing, ~42 min release run).
       Coverage-guided cargo-fuzz smoke stays launch work (nightly
       toolchain); §3.4's multi-worker seed gate belongs to the PG lane.
-- [ ] 5b (NOT codeable here): XMTP SDK install (network + supply-chain
-      approval), production-network gates (fees/rate limits/Gateway/SLA),
-      frozen-profile ADR ratification, ENG-001 selection — Protocol
-      Security + human sign-off.
+- [x] 5b RESOLVED without an XMTP run: ADR 0001 (owner-delegated,
+      2026-08-18) closes ENG-001 selecting Candidate A under the default
+      rule + frozen-profile fail rule (verified ciphersuite conflict) and
+      ratifies the frozen v1 profile. XMTP execution is moot for v1;
+      reopening conditions are in the ADR.
+
+## Production decisions (owner, 2026-08-18)
+- Witness operating model: self-operated at first in a SEPARATE Railway
+  project with its own access boundary and audit stream, transfer-ready
+  (state export + key handover documented); independent operator still
+  required before G3 — self-operation satisfies the G2 design gate only.
+- Production infrastructure: Railway (app + PostgreSQL + witness as
+  distinct services/projects). Failover/restore acceptance = re-running
+  the lab drills against the Railway Postgres.
 
 ## Phase 6 — remaining codeable hardening
 Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
