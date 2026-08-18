@@ -1,7 +1,10 @@
 import { Buffer } from "node:buffer";
 import type { Sql } from "postgres";
 import { sha256Bytes } from "../delivery/hashes";
-import { FICTIONAL_DELIVERY_LAB_ED25519_PUBLIC_KEY_RAW } from "../delivery/fictionalCryptoPorts.testing";
+import {
+  FICTIONAL_DELIVERY_LAB_ED25519_PUBLIC_KEY_RAW,
+  signFictionalDeliveryCheckpointDigestForTesting,
+} from "../delivery/fictionalCryptoPorts.testing";
 import {
   LAB_GENESIS_CHECKPOINT_DIGEST,
   LAB_GENESIS_ENVELOPE_ID,
@@ -304,7 +307,9 @@ export async function seedPostgresDeliveryLab(
         ${Buffer.from(seedValue.baseHeadHash as string, "base64url")},
         ${signingKeyId},
         ${Buffer.from(LAB_GENESIS_CHECKPOINT_DIGEST, "base64url")},
-        ${Buffer.alloc(64, 0x99)}, ${now}::timestamptz,
+        ${signFictionalDeliveryCheckpointDigestForTesting(
+          Buffer.from(LAB_GENESIS_CHECKPOINT_DIGEST, "base64url"),
+        )}, ${now}::timestamptz,
         ${now}::timestamptz + interval '365 days'
       )`;
     await tx`

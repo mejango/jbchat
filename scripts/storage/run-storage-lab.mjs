@@ -892,6 +892,7 @@ async function main() {
         "src/production/entitlement/eligibility.pgtest.ts",
         "src/production/storage/policyHeadIssuance.pgtest.ts",
         "src/production/storage/cursorNonceAllocator.pgtest.ts",
+        "src/production/witness/witnessCore.pgtest.ts",
       ],
       {
         env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
