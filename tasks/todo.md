@@ -220,8 +220,15 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       hash, outbox event). Lab suite runs the full add lifecycle and
       restores the shared conversation's counters afterward so the drills
       keep admitting fixture appends.
-- [ ] NEXT: Unit D — Rust core bridge decision (napi vs stdio) + wiring
-      the MLS projection verifier behind the provider-neutral trait.
+- [x] Unit D — ADR 0004: stdio JSONL subprocess bridge (not napi; SBOM =
+      lockfile, crash isolation, npm-only Railway builds, latency moot).
+      crates/service-bridge (jbm-mls-bridge: bridge/describe,
+      key-package/validate, lab-only synthetic generation) + TS client
+      src/production/mls/bridgeClient.ts (fail-closed on unset
+      JBM_MLS_BRIDGE_BINARY, protocol-major refusal). npm run mls:lab
+      builds the locked binary and drives it from Node; CI crypto job
+      runs it. Future verbs: commit projection once server-side group
+      state custody is designed.
 - [ ] Then: enrollment/eligibility/membership/append/pages HTTP routes;
       RPC finality + purchase adapters over ratified profiles; push
       notifications.
