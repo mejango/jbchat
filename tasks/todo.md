@@ -108,16 +108,28 @@ both candidates, but crypto/ leaks OpenMLS types (MlsGroup, KeyPackage,
 MlsMessageIn) across client-core's public boundary (its own README:111-113
 flags this), and the G1-required rejection corpus + fuzz smoke (CRY-05/06)
 do not exist for Candidate A either.
-- [ ] 5a (offline, codeable): extract the provider-neutral domain trait from
-      LabClient's surface; make the OpenMLS path one impl; re-parameterize
-      the 24 native_flow scenarios over the trait; add the checked-in
-      rejection corpus + fuzz-smoke target over the decoders; scale replay/
-      failpoint/seed counts toward spec (PRO-07 100k replays, PRO-10 1k
-      kills/failpoint, §3.4 10k seeds).
+- [x] 5a (7071c4a): harness::CandidateLabClient trait + harness::scenarios
+      (16 neutral scenarios incl. PRO-07/PRO-10-shaped scaled loops);
+      LabClient is the first impl; native_flow keeps OpenMLS-specific
+      probes; checked-in rejection corpus (12 entries × 4 ingresses, all
+      rejected without consuming state) + seeded deterministic mutation
+      smoke; scale knobs JBM_G1_REPLAY_COUNT / JBM_G1_KILLS_PER_FAILPOINT /
+      JBM_G1_FUZZ_MUTATIONS, verified once at spec scale (100k replays,
+      1k kills/point, 5k mutations — all passing, ~42 min release run).
+      Coverage-guided cargo-fuzz smoke stays launch work (nightly
+      toolchain); §3.4's multi-worker seed gate belongs to the PG lane.
 - [ ] 5b (NOT codeable here): XMTP SDK install (network + supply-chain
       approval), production-network gates (fees/rate limits/Gateway/SLA),
       frozen-profile ADR ratification, ENG-001 selection — Protocol
       Security + human sign-off.
+
+## Phase 6 — remaining codeable hardening
+- [ ] Storage-lane follow-ups deferred from Phase 2: DB-authoritative
+      timestamps, full relational authority graph replacing the custody
+      row, policy-head/quota anchors, scope mappings
+- [ ] Written Candidate-B (XMTP) evaluation against the provider-specific
+      hard gates (launch-gates.md 341-353) as ENG-001 decision support —
+      analysis document only; selection stays with Protocol Security
 
 ## Review notes
 (append as phases complete)
