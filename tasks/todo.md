@@ -205,11 +205,26 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       404 elsewhere); Railway runbook at docs/deploy/railway.md with the
       overlap-based transfer procedure. Self-operation satisfies the G2
       design gate only — G3 still requires the independent operator.
-- [ ] NEXT: membership-change service flow (add/remove/replace intents →
-      KeyPackage take → external proposal → MLS Commit) wiring the Rust
-      core behind the provider-neutral trait.
-- [ ] Then: enrollment/eligibility/append/pages HTTP routes; RPC finality
-      + purchase adapters over ratified profiles; push notifications.
+- [x] Membership-change storage flow, lab-proven end to end (three commits):
+      ADR 0003 (resolve-and-bind claim handles; derived committer set) +
+      membershipIntentStore (irreversible KeyPackage take, one-live-intent
+      conflict precedence, capability-purpose admission, role-credential
+      roster projection, membership_pending CAS); custody-fence refactor
+      (reconstructAuthoritySnapshot shared by loadAuthority and the new
+      refreshCustodySnapshotDigest — EVERY writer that touches fenced
+      fields must call it in-transaction); externalProposalStore (chained
+      entitlement_signer envelope append, shared
+      computeExternalProposalHash in hashes.ts, sync.ts now imports it);
+      membershipCommitStore (full spec CAS, Welcome + mailbox fan-out,
+      roster/recipient projection rewrite proving the intent's proposed
+      hash, outbox event). Lab suite runs the full add lifecycle and
+      restores the shared conversation's counters afterward so the drills
+      keep admitting fixture appends.
+- [ ] NEXT: Unit D — Rust core bridge decision (napi vs stdio) + wiring
+      the MLS projection verifier behind the provider-neutral trait.
+- [ ] Then: enrollment/eligibility/membership/append/pages HTTP routes;
+      RPC finality + purchase adapters over ratified profiles; push
+      notifications.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,
