@@ -1,0 +1,173 @@
+{
+  "kind": "jbm-finality-profile-set.v1",
+  "profiles": [
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10001",
+      "profileRevision": 1,
+      "chainId": "eip155:1",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:1",
+        "family": "ethereum-l1",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    },
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10002",
+      "profileRevision": 1,
+      "chainId": "eip155:11155111",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:11155111",
+        "family": "ethereum-l1",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    },
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10003",
+      "profileRevision": 1,
+      "chainId": "eip155:10",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:10",
+        "family": "op-stack",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    },
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10004",
+      "profileRevision": 1,
+      "chainId": "eip155:8453",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:8453",
+        "family": "op-stack",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    },
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10005",
+      "profileRevision": 1,
+      "chainId": "eip155:11155420",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:11155420",
+        "family": "op-stack",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    },
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10006",
+      "profileRevision": 1,
+      "chainId": "eip155:84532",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:84532",
+        "family": "op-stack",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    },
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10007",
+      "profileRevision": 1,
+      "chainId": "eip155:42161",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:42161",
+        "family": "arbitrum",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    },
+    {
+      "finalityProfileId": "00000000-0000-4000-8000-000000f10008",
+      "profileRevision": 1,
+      "chainId": "eip155:421614",
+      "canonicalDocument": {
+        "kind": "jbm-finality-profile.v1",
+        "chainId": "eip155:421614",
+        "family": "arbitrum",
+        "blockTag": "finalized",
+        "minimumProviderQuorum": 2,
+        "requireBlockHashAgreement": true,
+        "requireArchiveStateAtReceiptBlock": true,
+        "allowConfirmationFallback": false,
+        "safeHeadUse": "suspend-existing-authority-only",
+        "onReorg": "revoke-leases-and-rekey",
+        "recheckSeconds": 60,
+        "pauseRule": "finalized-reorg-pauses-profile"
+      },
+      "adapterReleaseId": "jbm-evm-adapter.1",
+      "ratificationEvidenceRef": "docs/adr/0005-finality-profiles.md"
+    }
+  ]
+}

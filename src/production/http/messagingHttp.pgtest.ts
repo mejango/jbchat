@@ -256,6 +256,7 @@ describeStorage("messaging HTTP surface", () => {
         allowedChainIds: [FIXTURE_CHAIN_ID],
         logSigner: null,
         cursor: { keyId: "lab-http-cursor", key: Buffer.alloc(32, 0x61) },
+        rpcEndpoints: null,
       }),
       connect: () => sql,
       now: () => NOW,

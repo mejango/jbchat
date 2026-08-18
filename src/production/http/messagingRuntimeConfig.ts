@@ -2,6 +2,12 @@ import { Buffer } from "node:buffer";
 
 const KEY_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const CHAIN_ID_PATTERN = /^eip155:[1-9][0-9]*$/;
+const PROVIDER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+export interface RpcEndpointConfig {
+  readonly providerId: string;
+  readonly url: string;
+}
 
 export type MessagingRuntimeConfig =
   | {
@@ -19,6 +25,9 @@ export type MessagingRuntimeConfig =
         readonly keyId: string;
         readonly key: Buffer;
       } | null;
+      readonly rpcEndpoints: Readonly<
+        Record<string, readonly RpcEndpointConfig[]>
+      > | null;
     }
   | { readonly status: "unconfigured" };
 
@@ -79,7 +88,54 @@ export function loadMessagingRuntimeConfig(
     allowedChainIds: Object.freeze(allowedChainIds),
     logSigner,
     cursor,
+    rpcEndpoints: parseRpcEndpoints(environment.JBM_RPC_ENDPOINTS),
   });
+}
+
+/**
+ * ADR 0005 quorum endpoints: JSON of chainId -> [{providerId, url}, ...].
+ * A malformed document, a non-allowlisted chain, fewer than two providers,
+ * duplicate provider IDs, or a non-HTTPS URL disables the WHOLE lane -
+ * chain reads never run on a partially valid configuration.
+ */
+function parseRpcEndpoints(
+  value: string | undefined,
+): Readonly<Record<string, readonly RpcEndpointConfig[]>> | null {
+  if (!value) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const endpoints: Record<string, readonly RpcEndpointConfig[]> = {};
+  for (const [chainId, list] of Object.entries(parsed)) {
+    if (!CHAIN_ID_PATTERN.test(chainId) || !Array.isArray(list)) return null;
+    if (list.length < 2) return null;
+    const providers: RpcEndpointConfig[] = [];
+    for (const entry of list) {
+      const record = entry as Record<string, unknown>;
+      const providerId = record.providerId;
+      const url = record.url;
+      if (
+        typeof providerId !== "string" ||
+        !PROVIDER_ID_PATTERN.test(providerId) ||
+        typeof url !== "string" ||
+        !url.startsWith("https://")
+      ) {
+        return null;
+      }
+      providers.push(Object.freeze({ providerId, url }));
+    }
+    if (new Set(providers.map((p) => p.providerId)).size !== providers.length) {
+      return null;
+    }
+    endpoints[chainId] = Object.freeze(providers);
+  }
+  return Object.freeze(endpoints);
 }
 
 function decodeSecret(value: string | undefined): Buffer | null {

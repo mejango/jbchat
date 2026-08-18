@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { createPrivateKey, sign as signNode } from "node:crypto";
+import { createHash, createPrivateKey, sign as signNode } from "node:crypto";
 import postgres, { type Sql } from "postgres";
 import {
   createEnrollmentStore,
@@ -12,6 +12,12 @@ import {
   createUnavailableWalletProofVerifier,
   type WalletProofVerifierPort,
 } from "../identity/walletProofVerifier";
+import { createHttpJsonRpcTransport } from "../chain/jsonRpc";
+import {
+  createQuorumWalletProofVerifier,
+  type RatifiedChainProfile,
+} from "../chain/quorumWalletProofVerifier";
+import finalityProfileSet from "../../../config/finality-profiles.v1.json";
 import {
   createMembershipIntentStore,
   type MembershipIntentStore,
@@ -164,7 +170,7 @@ export function createMessagingHttpHandlers(
       );
     const walletProofVerifier =
       contextValue.walletProofVerifier ??
-      createUnavailableWalletProofVerifier();
+      walletVerifierFromEndpoints(config.rpcEndpoints);
     const logSigner =
       contextValue.logSigner ??
       (config.logSigner
@@ -641,6 +647,51 @@ export function createMessagingHttpHandlers(
       });
     },
   });
+}
+
+/**
+ * Builds the ADR 0005 quorum wallet verifier for every configured chain
+ * whose ratified profile exists in the checked-in canonical set. No
+ * endpoints, or a chain without a ratified profile, stays fail-closed
+ * unavailable - never a partial or inferred configuration.
+ */
+function walletVerifierFromEndpoints(
+  rpcEndpoints: Readonly<
+    Record<string, readonly { providerId: string; url: string }[]>
+  > | null,
+): WalletProofVerifierPort {
+  if (!rpcEndpoints) return createUnavailableWalletProofVerifier();
+  const profiles: RatifiedChainProfile[] = [];
+  for (const [chainId, endpoints] of Object.entries(rpcEndpoints)) {
+    const ratified = finalityProfileSet.profiles.find(
+      (profile) => profile.chainId === chainId,
+    );
+    if (!ratified) continue;
+    profiles.push({
+      chainId,
+      finalityProfileId: ratified.finalityProfileId,
+      finalityProfileRevision: String(ratified.profileRevision),
+      finalityProfileHash: createHashOfCanonicalDocument(
+        ratified.canonicalDocument,
+      ),
+      transports: endpoints.map((endpoint) =>
+        createHttpJsonRpcTransport({
+          providerId: endpoint.providerId,
+          url: endpoint.url,
+        }),
+      ),
+      minimumProviderQuorum: 2,
+    });
+  }
+  return profiles.length > 0
+    ? createQuorumWalletProofVerifier(profiles)
+    : createUnavailableWalletProofVerifier();
+}
+
+function createHashOfCanonicalDocument(document: unknown): Buffer {
+  return createHash("sha256")
+    .update(JSON.stringify(document), "utf8")
+    .digest();
 }
 
 function createSeededEd25519CredentialSigner(
