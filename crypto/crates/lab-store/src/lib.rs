@@ -4,6 +4,8 @@
 //! useful for exercising invariants, but it is not durable storage and has no
 //! production crash or rollback guarantees.
 
+pub mod harness;
+
 use core::fmt;
 use std::{collections::BTreeMap, sync::RwLock};
 

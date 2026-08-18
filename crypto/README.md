@@ -111,8 +111,33 @@ application event model. In particular:
 - `ProfileProvider` and the upstream `MlsGroup` type remain public in this
   native evidence crate. Production must expose an opaque policy-preserving
   boundary so downstream callers cannot bypass the checked wrapper functions.
+  At the lab layer that boundary now exists: the provider-neutral
+  `harness::CandidateLabClient` trait (launch-gates.md §3.1) is the common
+  domain API, and `harness::scenarios` holds the shared synthetic scenarios a
+  Candidate B adapter must pass byte-for-byte. `client-core` itself still
+  exposes OpenMLS internals for this candidate's own adversarial probes.
 
 These are promotion blockers, not implied features of the pre-G1 lab.
+
+## Provider-neutral harness, rejection corpus, and scale knobs
+
+- `lab-store/src/harness.rs` defines `CandidateLabClient` and the common
+  scenario set; `tests/native_flow.rs` binds every scenario to the native
+  OpenMLS candidate and keeps the OpenMLS-specific wire-format and
+  off-profile probes as candidate-local tests.
+- `crypto/corpus/{application,commit,key-package,welcome}/` is the
+  checked-in rejection corpus (CRY-05/CRY-06). Every entry must be rejected
+  by its ingress without consuming state. Regenerate with
+  `cargo test -p juicebox-messaging-mls-lab-store --test rejection_corpus
+  regenerate_rejection_corpus -- --ignored --exact` and commit the files.
+- `tests/rejection_corpus.rs` also runs a seeded deterministic mutation
+  smoke each check. Coverage-guided sanitizer/fuzz smoke on the exact
+  release artifact still requires the nightly cargo-fuzz toolchain and
+  remains a pre-G1 blocker; the deterministic smoke is its offline floor.
+- Scale knobs for evidence runs (checks stay fast at the defaults):
+  `JBM_G1_REPLAY_COUNT` (default 1,000; PRO-07 evidence uses 100,000),
+  `JBM_G1_KILLS_PER_FAILPOINT` (default 100; PRO-10 evidence uses 1,000),
+  `JBM_G1_FUZZ_MUTATIONS` (default 500 per ingress).
 
 ## Dependency evidence
 

@@ -101,9 +101,23 @@ codeable item.
       stay fail-closed unavailable until finality profiles are ratified
       (ENG-004) and a production manifest is signed — launch work, not code.
 
-## Phase 5 — Candidate B (XMTP) harness
-- [ ] Run the provider-neutral G1 harness against XMTP SDK; record comparative
-      evidence (selection/approval itself stays with Protocol Security)
+## Phase 5 — provider-neutral G1 harness (reframed after assessment)
+Assessment finding: no provider-neutral harness exists to "run against XMTP".
+launch-gates.md:65-68 mandates a common domain API + synthetic harness on
+both candidates, but crypto/ leaks OpenMLS types (MlsGroup, KeyPackage,
+MlsMessageIn) across client-core's public boundary (its own README:111-113
+flags this), and the G1-required rejection corpus + fuzz smoke (CRY-05/06)
+do not exist for Candidate A either.
+- [ ] 5a (offline, codeable): extract the provider-neutral domain trait from
+      LabClient's surface; make the OpenMLS path one impl; re-parameterize
+      the 24 native_flow scenarios over the trait; add the checked-in
+      rejection corpus + fuzz-smoke target over the decoders; scale replay/
+      failpoint/seed counts toward spec (PRO-07 100k replays, PRO-10 1k
+      kills/failpoint, §3.4 10k seeds).
+- [ ] 5b (NOT codeable here): XMTP SDK install (network + supply-chain
+      approval), production-network gates (fees/rate limits/Gateway/SLA),
+      frozen-profile ADR ratification, ENG-001 selection — Protocol
+      Security + human sign-off.
 
 ## Review notes
 (append as phases complete)
