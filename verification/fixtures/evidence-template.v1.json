@@ -8,7 +8,7 @@
     "launch_gates_digest": "sha256:dc838e82a0bfe9157c9b73f1cefa833680ad2b0158d855023d45ca08d388080a",
     "requirement_catalog_digest": "sha256:99b15f922426fafa2fc62cb995d6413c5591a75d545f2a056c862251fbe166bb",
     "evidence_schema_digest": "sha256:49c4568fc38fc907b301a092fd5d4f72c22046df510ef1c462f7e01c9f9d4cff",
-    "evidence_checker_digest": "sha256:7fb4d37f4bb48d541119b7bbe74fd362502e00a99d944c37145e9ab1db72403a"
+    "evidence_checker_digest": "sha256:bcfccd93df9a0cd801a8dfe0abc4d9380bcc6325bed357470352c7cebd5d174d"
   },
   "promotion": {
     "requested": false,

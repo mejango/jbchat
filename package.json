@@ -42,6 +42,7 @@
     "check:release": "npm run check:release:prerequisites && node scripts/check-verification-evidence.mjs --mode promotion"
   },
   "dependencies": {
+    "@noble/curves": "2.3.0",
     "next": "16.3.1",
     "postgres": "3.4.9",
     "qrcode": "1.5.4",

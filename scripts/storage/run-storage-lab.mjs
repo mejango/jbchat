@@ -683,6 +683,28 @@ async function main() {
     );
     assert.equal(embedSuite.status, 0, "the embed context plane suite must pass");
 
+    console.error("Running the device enrollment and session suite...");
+    const identitySuite = run(
+      "npx",
+      [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.storage.config.ts",
+        "src/production/identity/enrollment.pgtest.ts",
+      ],
+      {
+        env: { ...process.env, JBM_STORAGE_DATABASE_URL: databaseUrl },
+        stdio: ["ignore", "inherit", "inherit"],
+        encoding: undefined,
+      },
+    );
+    assert.equal(
+      identitySuite.status,
+      0,
+      "the device enrollment and session suite must pass",
+    );
+
     await runRestoreDrill(labDirectory, port, databaseUrl);
 
     console.error("Storage lab passed. This is lab evidence only; G2 remains open.");

@@ -72,12 +72,21 @@ codeable item.
       postMessage, one-use handle custody, fail-closed channel; 6 behavioral
       unit tests through the real protocol gates.
 
-## Phase 4 — identity & chain authority (NEXT)
-- [ ] SIWE device sessions against the enrollment/auth_sessions tables +
-      signature verifiers. Needs an EVM signature dependency decision
-      (recommend @noble/secp256k1 or @noble/curves — zero/minimal-dep,
-      audited) for EIP-191 recovery; same supply-chain discipline as the
-      postgres pin.
+## Phase 4 — identity & chain authority
+- [x] SIWE device sessions + signature verifiers: `src/production/identity/`
+      — identityCrypto (exact EIP-4361 message with 13 ordered urn resources,
+      EIP-191 EOA recovery low-s only via pinned @noble/curves 2.3.0,
+      RFC 7638 JKT, ES256 possession verify, length-prefixed possession
+      digest), identityKeyedCrypto (purpose-separated HMACs + sealed
+      payloads), walletProofVerifier (fail-closed dispatch; contract wallets
+      unavailable without bounded 1271/6492 execution), enrollmentStore (PG
+      paired-claim state machine: allocate → challenges → one-tx terminal
+      claim → verify outside tx → issue/invalid/unavailable; wallet_links +
+      installations + device_credentials + initial key_packages row;
+      auth_sessions token families with rotation + reuse-kills-family).
+      9 offline crypto tests (incl. known priv-1 address vector) + 8 pgtest
+      scenarios in the storage lab. ERC-1271/6492 verification and DPoP/HTTP
+      enforcement remain launch work needing real chain adapters.
 - [ ] Finalized Juicebox receipt verification over pinned deployments
 
 ## Phase 5 — Candidate B (XMTP) harness
