@@ -494,6 +494,38 @@ export async function seedPostgresDeliveryLab(
         )`;
     }
     await tx`
+      INSERT INTO conversation_page_end_projections (
+        conversation_id, position, generation, release_profile_id,
+        delivery_limits_digest, etag, epoch, roster_version,
+        confirmed_transcript_hash, policy_head_id, policy_revision,
+        policy_mandatory_proposal_count, policy_mandatory_proposal_set_hash,
+        policy_authorized_send_grant_set_hash,
+        policy_authorized_quota_policy_digest, policy_head_sequence,
+        policy_head_hash, policy_delivery_log_position,
+        policy_delivery_log_head_hash, policy_witness_checkpoint_id,
+        policy_witness_evidence_digest, created_at
+      ) VALUES (
+        ${conversation.conversationId}, ${basePosition},
+        ${conversation.generation}, ${conversation.releaseProfileId},
+        ${Buffer.from(conversation.deliveryLimitsDigest, "base64url")},
+        ${conversation.etag}, ${conversation.epoch},
+        ${conversation.rosterVersion},
+        ${Buffer.from(conversation.confirmedTranscriptHash, "base64url")},
+        ${snapshot.policyHead.policyHeadId},
+        ${snapshot.policyHead.policyRevision},
+        ${snapshot.policyHead.mandatoryProposalCount},
+        ${Buffer.from(snapshot.policyHead.mandatoryProposalSetHash, "base64url")},
+        ${Buffer.from(snapshot.policyHead.authorizedSendGrantSetHash, "base64url")},
+        ${Buffer.from(snapshot.policyHead.authorizedQuotaPolicyDigest, "base64url")},
+        ${snapshot.policyHead.policyHeadSequence},
+        ${Buffer.from(snapshot.policyHead.policyHeadHash, "base64url")},
+        ${snapshot.policyHead.deliveryLogPosition},
+        ${Buffer.from(snapshot.policyHead.deliveryLogHeadHash, "base64url")},
+        ${snapshot.policyHead.witnessCheckpointId},
+        ${Buffer.from(snapshot.policyHead.witnessEvidenceDigest, "base64url")},
+        ${now}::timestamptz
+      )`;
+    await tx`
       INSERT INTO delivery_conversation_authority (
         conversation_id, conversation_generation, realm_id, snapshot_digest,
         active_signing_key_id, updated_at

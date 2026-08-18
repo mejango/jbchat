@@ -4,6 +4,7 @@ import postgres, { type Sql } from "postgres";
 import {
   LAB_CONVERSATION_ID,
   LAB_ENVELOPE_ID,
+  LAB_INSTALLATION_ID,
   LAB_ENVELOPE_ID_2,
   LAB_IDEMPOTENCY_KEY_2,
   LAB_NOW,
@@ -24,6 +25,7 @@ import {
   parseSigningKeyId,
   type Rfc3339Millis,
 } from "../delivery/valueObjects";
+import { createConversationPageReader } from "./conversationPageReader";
 import {
   createPostgresDeliveryAppendStore,
   type PostgresDeliveryAppendStore,
@@ -561,7 +563,8 @@ describeStorage("PostgreSQL application-append repository", () => {
          WHERE conversation_id = ${LAB_CONVERSATION_ID}) AS projections,
         (SELECT count(*) FROM application_append_acceptances
          WHERE conversation_id = ${LAB_CONVERSATION_ID}) AS acceptances`;
-    expect(String(counts.projections)).toBe(String(counts.acceptances));
+    // Every acceptance plus the seeded base-position anchor projection.
+    expect(Number(counts.projections)).toBe(Number(counts.acceptances) + 1);
 
     const [anchor] = await sql`
       SELECT etag, policy_head_sequence FROM conversation_page_end_projections
@@ -590,5 +593,123 @@ describeStorage("PostgreSQL application-append repository", () => {
       WHERE conversation_id = ${LAB_CONVERSATION_ID}
         AND policy_head_sequence = ${snapshot.policyHead.policyHeadSequence}`;
     expect(String(transition.effective_from_position)).toBe("2");
+  });
+
+  it("serves position-ordered pages joined to immutable historical projections", async () => {
+    const reader = createConversationPageReader({ sql });
+    const firstPage = await reader.readPage({
+      conversationId: LAB_CONVERSATION_ID,
+      installationId: LAB_INSTALLATION_ID,
+      afterPosition: null,
+      maxEvents: 3,
+      maxSerializedBytes: 1_048_576,
+    });
+    expect(firstPage.status).toBe("page");
+    if (firstPage.status !== "page") throw new Error("first page refused");
+    expect(firstPage.events.map(({ position }) => position)).toEqual([
+      "1",
+      "2",
+      "3",
+    ]);
+    expect(firstPage.events[0].envelopeClass).toBe("mls_commit");
+    expect(firstPage.hasMore).toBe(true);
+    expect(firstPage.snapshot.position).toBe("3");
+    const [storedProjection] = await sql`
+      SELECT etag, policy_head_sequence FROM conversation_page_end_projections
+      WHERE conversation_id = ${LAB_CONVERSATION_ID} AND position = 3`;
+    expect(firstPage.snapshot.etag).toBe(String(storedProjection.etag));
+    expect(firstPage.snapshot.policyHeadSequence).toBe(
+      String(storedProjection.policy_head_sequence),
+    );
+
+    // Byte accounting stops before the ceiling without splitting an item.
+    const bounded = await reader.readPage({
+      conversationId: LAB_CONVERSATION_ID,
+      installationId: LAB_INSTALLATION_ID,
+      afterPosition: "1",
+      maxEvents: 10,
+      maxSerializedBytes: Number(firstPage.events[1].envelopeBytes),
+    });
+    if (bounded.status !== "page") throw new Error("bounded page refused");
+    expect(bounded.events.length).toBe(1);
+    expect(bounded.hasMore).toBe(true);
+
+    // A later empty page at an authenticated positive anchor replays the
+    // exact stored historical projection, byte-identical across repeats.
+    const [lastRow] = await sql`
+      SELECT max(position) AS last FROM envelopes
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    const anchor = String(lastRow.last);
+    const emptyPage = await reader.readPage({
+      conversationId: LAB_CONVERSATION_ID,
+      installationId: LAB_INSTALLATION_ID,
+      afterPosition: anchor,
+      maxEvents: 10,
+      maxSerializedBytes: 1_048_576,
+    });
+    const emptyPageAgain = await reader.readPage({
+      conversationId: LAB_CONVERSATION_ID,
+      installationId: LAB_INSTALLATION_ID,
+      afterPosition: anchor,
+      maxEvents: 10,
+      maxSerializedBytes: 1_048_576,
+    });
+    expect(emptyPage).toMatchObject({
+      status: "page",
+      hasMore: false,
+      nextPosition: anchor,
+    });
+    expect(JSON.stringify(emptyPageAgain)).toBe(JSON.stringify(emptyPage));
+
+    expect(
+      await reader.readPage({
+        conversationId: LAB_CONVERSATION_ID,
+        installationId: "00000000-0000-4000-8000-00000000dead",
+        afterPosition: null,
+        maxEvents: 10,
+        maxSerializedBytes: 1_048_576,
+      }),
+    ).toEqual({ status: "not-a-member" });
+
+    // A purged required projection is typed history-gone, never a
+    // substituted current-state snapshot. The lab is superuser, so it can
+    // simulate the purge underneath the immutability trigger.
+    const [purged] = await sql`
+      SELECT * FROM conversation_page_end_projections
+      WHERE conversation_id = ${LAB_CONVERSATION_ID} AND position = 3`;
+    await sql.unsafe(
+      "ALTER TABLE conversation_page_end_projections DISABLE TRIGGER conversation_page_end_projections_immutable_trigger",
+    );
+    await sql`
+      DELETE FROM conversation_page_end_projections
+      WHERE conversation_id = ${LAB_CONVERSATION_ID} AND position = 3`;
+    try {
+      const historyGone = await reader.readPage({
+        conversationId: LAB_CONVERSATION_ID,
+        installationId: LAB_INSTALLATION_ID,
+        afterPosition: null,
+        maxEvents: 3,
+        maxSerializedBytes: 1_048_576,
+      });
+      expect(historyGone).toEqual({
+        status: "history-gone",
+        nextRequiredPosition: "1",
+      });
+    } finally {
+      await sql`
+        INSERT INTO conversation_page_end_projections
+        ${sql(purged as Record<string, unknown>)}`;
+      await sql.unsafe(
+        "ALTER TABLE conversation_page_end_projections ENABLE TRIGGER conversation_page_end_projections_immutable_trigger",
+      );
+    }
+    const healed = await reader.readPage({
+      conversationId: LAB_CONVERSATION_ID,
+      installationId: LAB_INSTALLATION_ID,
+      afterPosition: null,
+      maxEvents: 3,
+      maxSerializedBytes: 1_048_576,
+    });
+    expect(healed.status).toBe("page");
   });
 });
