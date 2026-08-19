@@ -295,7 +295,12 @@ export function buildContentSecurityPolicy(
     `script-src ${scriptSources}`,
     "script-src-attr 'none'",
     `style-src ${styleSources}`,
-    "style-src-attr 'none'",
+    // Wallet SDK modals (Para/WalletConnect) style their own elements via
+    // the style attribute; top-level admits it. style-src itself stays
+    // nonce-strict, and the embed surface keeps style-src-attr 'none'.
+    documentKind === "embed"
+      ? "style-src-attr 'none'"
+      : "style-src-attr 'unsafe-inline'",
     documentKind === "embed"
       ? "worker-src 'self'"
       : "worker-src 'self' blob:",

@@ -44,6 +44,7 @@ describe("buildWebSecurityHeaderRules", () => {
     expect(embedCsp).toContain("frame-ancestors 'none'");
     expect(embedCsp).toContain("form-action 'none'");
     expect(embedCsp).toContain("frame-src 'none'");
+    expect(embedCsp).toContain("style-src-attr 'none'");
     // The embed surface never runs sign-in: no wallet-auth hosts leak in.
     expect(embedCsp).not.toContain("getpara.com");
     expect(embedCsp).not.toContain("walletconnect");
@@ -129,7 +130,7 @@ describe("buildWebSecurityHeaderRules", () => {
     );
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src-attr 'none'");
-    expect(csp).toContain("style-src-attr 'none'");
+    expect(csp).toContain("style-src-attr 'unsafe-inline'");
     expect(csp).toContain(
       "trusted-types nextjs nextjs#bundler juicebox-messaging#service-worker lit-html wcm default",
     );
@@ -138,7 +139,12 @@ describe("buildWebSecurityHeaderRules", () => {
     expect(csp).not.toContain("trusted-types 'none'");
     expect(csp).toContain("upgrade-insecure-requests");
     expect(csp).not.toContain("'unsafe-eval'");
-    expect(csp).not.toContain("'unsafe-inline'");
+    // unsafe-inline is allowed ONLY for the style attribute (wallet modals);
+    // it must never appear in a script directive.
+    expect(csp).toContain("style-src-attr 'unsafe-inline'");
+    expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).not.toContain("script-src-attr 'unsafe-inline'");
+    expect(csp).toContain("style-src 'self';");
     expect(csp).toContain("script-src 'none'");
     expect(csp).toContain("form-action 'self'");
     expect(csp).toContain("frame-src 'self'");

@@ -101,7 +101,9 @@ describe("createWebSecurityProxy", () => {
     expect(response.headers.get("Cache-Control")).toContain("no-store");
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).not.toContain("nonce-");
-    expect(csp).not.toContain("'unsafe-inline'");
+    // unsafe-inline only ever on the style attribute, never a script sink.
+    expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
+    expect(csp).not.toContain("script-src-attr 'unsafe-inline'");
   });
 
   it("accepts only an exact trusted-proxy HTTPS authority pair", () => {
@@ -173,7 +175,8 @@ describe("createWebSecurityProxy", () => {
       expect(csp).toContain("script-src 'none'");
       expect(csp).toContain("frame-ancestors 'none'");
       expect(csp).not.toContain("nonce-");
-      expect(csp).not.toContain("'unsafe-inline'");
+      expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
+      expect(csp).not.toContain("script-src-attr 'unsafe-inline'");
       observedHeaders.push([...response.headers.entries()]);
     }
 
