@@ -75,6 +75,9 @@ if (process.env.JBM_INTERNAL_SYNC_URL && process.env.JBM_INTERNAL_SYNC_TOKEN) {
           },
           signal: AbortSignal.timeout(60_000),
         });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
         const report = await response.json();
         if (report.promoted || report.retired) {
           console.log(
