@@ -308,6 +308,13 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       (payload-free; still no cache handler), PushManager subscribe w/
       NEXT_PUBLIC_VAPID_PUBLIC_KEY, endpoint register/delete, inbox
       toggle.
+- [x] DEPLOYED (2026-08-18 night): app + keeper redeployed with all
+      three lanes; prod DB at 20 migrations; /v1/internal/policy-witness-
+      sync live (401 unauth, clean report with token), new welcome +
+      envelope reads 401-gated, keeper sync trigger looping silently
+      (logs only on failure). Railway incident stalled builds for hours;
+      app moved to plain us-east4 (GCP builder pool) - eqdc* Metal
+      regions were the ones wedging.
 - [ ] Then: process post-genesis MLS commits client-side + multi-device
       staff (addMembers-plural in wasm); witness aging for
       provisioning; custom domains; GitHub auto-deploys after push.
