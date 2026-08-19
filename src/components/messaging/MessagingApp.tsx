@@ -57,16 +57,12 @@ export function MessagingApp() {
         <header className="mxHeader">
           <div className="mxRow">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/juicebox-mark.svg"
-              alt=""
-              style={{ height: 34, width: "auto" }}
-            />
+            <img src="/juicebox-mark.svg" alt="" width={25} height={32} />
             <div>
               <div className="mxDisplay" style={{ fontSize: 16 }}>
-                Juicebox Messaging
+                Fruitful
               </div>
-              <div className="mxHint">Private project support</div>
+              <div className="mxHint">Chat for Juicebox</div>
             </div>
           </div>
           <WalletMenu />

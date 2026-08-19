@@ -15,7 +15,7 @@ self.addEventListener("activate", (event) => {
 // message content stays end-to-end encrypted and decrypts only in the app.
 self.addEventListener("push", (event) => {
   event.waitUntil(
-    self.registration.showNotification("Juicebox Messaging", {
+    self.registration.showNotification("Fruitful", {
       body: "New activity in an encrypted conversation.",
       icon: "/icon.svg",
       tag: "jbm-messaging-wakeup",

@@ -22,7 +22,7 @@ const agrandir = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Juicebox Messaging",
+  title: "Fruitful",
   description: "Private purchase support and project community messaging.",
   robots: { index: false, follow: false },
 };

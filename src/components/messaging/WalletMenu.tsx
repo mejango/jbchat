@@ -18,7 +18,10 @@ import {
   signOut,
   subscribeSession,
 } from "@/lib/messaging/client";
-import { connectWithPara, isParaAvailable } from "@/providers/MessagingProviders";
+import {
+  connectWithPara,
+  isParaAvailable,
+} from "@/providers/MessagingProviders";
 import {
   BrandMark,
   OAUTH_METHODS,
@@ -98,7 +101,10 @@ export function WalletMenu() {
           onClick={() => setMenuOpen((open) => !open)}
           aria-expanded={menuOpen}
         >
-          <span className="mxDot" style={{ background: "var(--mx-amber-400)" }} />
+          <span
+            className="mxDot"
+            style={{ background: "var(--mx-amber-400)" }}
+          />
           <span>
             Viewing as
             <span style={{ display: "block", fontSize: 11, fontWeight: 400 }}>
@@ -132,7 +138,9 @@ export function WalletMenu() {
         <button className="mxBtnPrimary" onClick={() => setSheetOpen(true)}>
           Sign in
         </button>
-        {sheetOpen ? <ConnectSheet onClose={() => setSheetOpen(false)} /> : null}
+        {sheetOpen ? (
+          <ConnectSheet onClose={() => setSheetOpen(false)} />
+        ) : null}
       </>
     );
   }
@@ -290,9 +298,7 @@ function ConnectSheet({ onClose }: { onClose: () => void }) {
               Sign in
             </h2>
             <p className="mxHint" style={{ margin: "4px 0 0" }}>
-              {para
-                ? "You will receive a code."
-                : "Connect the wallet you support projects with."}
+              You will receive a code.
             </p>
           </div>
           <button
@@ -312,66 +318,63 @@ function ConnectSheet({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        {para ? (
-          <>
-            <form
-              style={{ marginTop: 16 }}
-              onSubmit={(event) => {
-                event.preventDefault();
-                void startPara();
+        <>
+          <form
+            style={{ marginTop: 16 }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (para) void startPara();
+            }}
+          >
+            <input
+              className="mxInput"
+              type="text"
+              value={entry}
+              onChange={(event) => setEntry(event.target.value)}
+              placeholder="you@email.com | +1 222 333 4444"
+              aria-label="Email address or phone number"
+              autoComplete="email"
+            />
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginTop: 10,
               }}
             >
-              <input
-                className="mxInput"
-                type="text"
-                value={entry}
-                onChange={(event) => setEntry(event.target.value)}
-                placeholder="you@email.com | +1 222 333 4444"
-                aria-label="Email address or phone number"
-                autoComplete="email"
-              />
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  marginTop: 10,
-                }}
+              <button
+                className="mxBtnPrimary"
+                type="submit"
+                disabled={!para || busy !== null}
+                style={!para ? { opacity: 0.6 } : undefined}
               >
-                <button
-                  className="mxBtnPrimary"
-                  type="submit"
-                  disabled={busy !== null}
-                >
-                  Continue
-                </button>
-              </div>
-            </form>
-            <p className="mxHint" style={{ margin: "14px 0 6px", fontSize: 12 }}>
-              Or, use socials
-            </p>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {OAUTH_METHODS.map(({ method, label }) => (
-                <button
-                  key={method}
-                  type="button"
-                  className="mxBtnSecondary"
-                  style={squareButton}
-                  title={label}
-                  aria-label={label}
-                  disabled={busy !== null}
-                  onClick={() => void startPara()}
-                >
-                  <BrandMark method={method} />
-                </button>
-              ))}
+                Continue
+              </button>
             </div>
-            <p className="mxHint" style={{ margin: "14px 0 6px", fontSize: 12 }}>
-              … or, a wallet.
-            </p>
-          </>
-        ) : (
-          <div style={{ marginTop: 16 }} />
-        )}
+          </form>
+          <p className="mxHint" style={{ margin: "14px 0 6px", fontSize: 12 }}>
+            Or, use socials
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {OAUTH_METHODS.map(({ method, label }) => (
+              <button
+                key={method}
+                type="button"
+                className="mxBtnSecondary"
+                style={squareButton}
+                title={label}
+                aria-label={label}
+                disabled={!para || busy !== null}
+                onClick={() => void startPara()}
+              >
+                <BrandMark method={method} />
+              </button>
+            ))}
+          </div>
+          <p className="mxHint" style={{ margin: "14px 0 6px", fontSize: 12 }}>
+            … or, a wallet.
+          </p>
+        </>
 
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {offerableWallets(connectors).map((connector) => (

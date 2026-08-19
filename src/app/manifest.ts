@@ -2,7 +2,7 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Juicebox Messaging",
+    name: "Fruitful",
     short_name: "JB Messages",
     description: "Private purchase support and project community messaging.",
     start_url: "/",

@@ -26,7 +26,7 @@ export function AccountView({ address }: { address: string }) {
             className="mxDisplay"
             style={{ color: "inherit", textDecoration: "none", fontSize: 16 }}
           >
-            Juicebox Messaging
+            Fruitful
           </Link>
           <WalletMenu />
         </header>

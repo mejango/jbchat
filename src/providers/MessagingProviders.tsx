@@ -31,7 +31,7 @@ export const SUPPORTED_CHAINS = [
 function connectors(): CreateConnectorFn[] {
   const list: CreateConnectorFn[] = [injected({ shimDisconnect: true })];
   list.push(
-    coinbaseWallet({ appName: "Juicebox Messaging" }),
+    coinbaseWallet({ appName: "Fruitful" }),
   );
   const walletConnectProjectId =
     process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID;
@@ -40,8 +40,8 @@ function connectors(): CreateConnectorFn[] {
       walletConnect({
         projectId: walletConnectProjectId,
         metadata: {
-          name: "Juicebox Messaging",
-          description: "Private project support over Juicebox",
+          name: "Fruitful",
+          description: "Chat for Juicebox",
           url:
             typeof window === "undefined"
               ? "https://fruitful.chat"
@@ -87,7 +87,7 @@ export async function connectWithPara(): Promise<void> {
   const connector = wagmiConfig._internal.connectors.setup(
     paraConnector({
       para: para as never,
-      appName: "Juicebox Messaging",
+      appName: "Fruitful",
       options: {},
       transports,
     }) as never,
