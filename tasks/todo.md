@@ -315,9 +315,22 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       (logs only on failure). Railway incident stalled builds for hours;
       app moved to plain us-east4 (GCP builder pool) - eqdc* Metal
       regions were the ones wedging.
-- [ ] Then: process post-genesis MLS commits client-side + multi-device
-      staff (addMembers-plural in wasm); witness aging for
-      provisioning; custom domains; GitHub auto-deploys after push.
+- [x] MULTI-DEVICE STAFF + FOLLOWER COMMITS (237bbfa, deployed): core
+      add_members plural (one Commit, one Welcome for all invitees;
+      3-member native test), activation welcomes every staff
+      installation, group map tracks the processed commit position and
+      the transcript loop merges later commits in order before opening
+      newer ciphertexts (unmergeable commit stops rendering).
+- [x] EXTERNAL-SENDER AGING (01cccbd): keeper-driven rotation per ADR
+      0001 item 9 - promote staged into the 14-day overlap, stage the
+      next generation, retire expired, non-rollback generation ledger;
+      plans/heads read real generations. POST
+      /v1/internal/external-sender-rotation, keeper cadence 6h.
+      Lab-proven (promote/idempotent/retire).
+- [ ] Then: custom domains + GitHub auto-deploys (both wait on owner:
+      domain names, repo push); independent witness operation (G3).
+      Client niceties when wanted: KeyPackage restock trigger,
+      multi-conversation welcome batching.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,
