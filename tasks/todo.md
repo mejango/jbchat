@@ -295,10 +295,22 @@ Storage-lane follow-ups deferred from Phase 2, executed (1)→(4)→(3)→(2):
       If-Match + idempotency); GET detail serves etag/epoch/policy-head
       state. E2e: plan -> activation -> witness -> both-way sends ->
       events read back. Deployed app+keeper with sync/witness env.
-- [ ] Then: browser/native MLS core (unblocks real conversation
-      activation from the UI + message send); frontend send/receive UI;
-      push subscribe UI; witness aging for provisioning; custom
-      domains; GitHub auto-deploys after push.
+- [x] BROWSER MLS CORE + LIVE SEND UI (805af3f): crypto wasm-client
+      crate (client core -> wasm32, state snapshot in IDB, native
+      round-trip test), real MLS KeyPackages at enrollment + 3 spares,
+      on-device claim->plan->group+Commit+Welcome->activate, welcome
+      sync + decrypt-once-cached transcript, live thread UI with
+      composer. New reads: envelope body + installation welcomes
+      (lab-covered incl. cross-installation 403). Ceilings: single
+      welcome-target activation; post-genesis commits not yet
+      client-processed.
+- [x] PUSH SUBSCRIBE UI (ba893b4): sw push/notificationclick handlers
+      (payload-free; still no cache handler), PushManager subscribe w/
+      NEXT_PUBLIC_VAPID_PUBLIC_KEY, endpoint register/delete, inbox
+      toggle.
+- [ ] Then: process post-genesis MLS commits client-side + multi-device
+      staff (addMembers-plural in wasm); witness aging for
+      provisioning; custom domains; GitHub auto-deploys after push.
 
 NOT codeable here (unchanged): succinct coalesced range proofs beyond the
 witness's consistency proofs, the independent OPERATION of the witness,

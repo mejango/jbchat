@@ -27,7 +27,10 @@ const APPLICATION_CONTENT_TYPE =
 function b64url(bytes: Uint8Array): string {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
 }
 
 function fromB64url(value: string): Uint8Array {
@@ -80,7 +83,9 @@ export interface CachedMessage {
 type MessageCache = Record<string, CachedMessage>;
 
 async function readMessageCache(conversationId: string): Promise<MessageCache> {
-  return (await idbGet<MessageCache>(MESSAGE_CACHE_PREFIX + conversationId)) ?? {};
+  return (
+    (await idbGet<MessageCache>(MESSAGE_CACHE_PREFIX + conversationId)) ?? {}
+  );
 }
 
 async function writeMessageCache(
@@ -167,28 +172,33 @@ export async function startConversation(claimHandle: string): Promise<string> {
     await crypto.subtle.digest("SHA-256", added.welcome.slice().buffer),
   );
 
-  const activated = await api("POST", "/v1/conversations", {
-    planId: plan.planId,
-    conversationId: plan.conversationId,
-    rosterHash: plan.rosterHash,
-    externalSendersHash: plan.externalSendersHash,
-    mls: {
-      cipherSuite: "0x0001",
-      groupId: b64url(groupId),
-      epoch: String(added.epoch),
-      envelopeId: crypto.randomUUID(),
-      commit: b64url(commit),
-      envelopeSha256: b64url(commitSha),
-      resultingConfirmedTranscriptHash: b64url(added.confirmedTranscriptHash),
-      welcomeByInstallation: [
-        {
-          installationId: welcomeTargets[0].installationId,
-          welcome: b64url(added.welcome),
-          welcomeSha256: b64url(welcomeSha),
-        },
-      ],
+  const activated = await api(
+    "POST",
+    "/v1/conversations",
+    {
+      planId: plan.planId,
+      conversationId: plan.conversationId,
+      rosterHash: plan.rosterHash,
+      externalSendersHash: plan.externalSendersHash,
+      mls: {
+        cipherSuite: "0x0001",
+        groupId: b64url(groupId),
+        epoch: String(added.epoch),
+        envelopeId: crypto.randomUUID(),
+        commit: b64url(commit),
+        envelopeSha256: b64url(commitSha),
+        resultingConfirmedTranscriptHash: b64url(added.confirmedTranscriptHash),
+        welcomeByInstallation: [
+          {
+            installationId: welcomeTargets[0].installationId,
+            welcome: b64url(added.welcome),
+            welcomeSha256: b64url(welcomeSha),
+          },
+        ],
+      },
     },
-  });
+    { "If-Match": `"plan-${plan.planId}-1"` },
+  );
   if (activated.status !== 201) {
     throw new Error(await reason(activated, "activation_refused"));
   }
