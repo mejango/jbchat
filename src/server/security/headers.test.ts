@@ -47,6 +47,8 @@ describe("buildWebSecurityHeaderRules", () => {
     // The embed surface never runs sign-in: no wallet-auth hosts leak in.
     expect(embedCsp).not.toContain("getpara.com");
     expect(embedCsp).not.toContain("walletconnect");
+    expect(embedCsp).toContain("worker-src 'self'");
+    expect(embedCsp).not.toContain("worker-src 'self' blob:");
     expect(embedCsp).toContain("sandbox allow-scripts allow-same-origin");
     expect(embedCsp).toContain("trusted-types nextjs nextjs#bundler");
     expect(embedCsp).not.toContain("juicebox-messaging#service-worker");
@@ -144,6 +146,7 @@ describe("buildWebSecurityHeaderRules", () => {
     expect(csp).toContain("https://*.getpara.com");
     expect(csp).toContain("wss://*.walletconnect.org");
     expect(csp).toContain("https://verify.walletconnect.com");
+    expect(csp).toContain("worker-src 'self' blob:");
     expect(csp).not.toContain("sandbox allow-scripts");
     expect(globalHeaders.get("Permissions-Policy")).toContain(
       "clipboard-write=(self)",

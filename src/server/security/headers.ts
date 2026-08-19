@@ -296,7 +296,9 @@ export function buildContentSecurityPolicy(
     "script-src-attr 'none'",
     `style-src ${styleSources}`,
     "style-src-attr 'none'",
-    "worker-src 'self'",
+    documentKind === "embed"
+      ? "worker-src 'self'"
+      : "worker-src 'self' blob:",
   ];
 
   if (config.mode === "production") {
