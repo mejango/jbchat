@@ -404,7 +404,7 @@ function ConnectSheet({ onClose }: { onClose: () => void }) {
                   style={{ width: 20, height: 20 }}
                 />
               ) : (
-                <WalletFallbackMark />
+                <WalletFallbackMark id={connector.id} />
               )}
             </button>
           ))}

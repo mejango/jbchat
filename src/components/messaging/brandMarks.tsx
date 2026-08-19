@@ -71,8 +71,41 @@ export function BrandMark({
   );
 }
 
-/** Stand-in mark for connectors that announce no icon of their own. */
-export function WalletFallbackMark({ size = 20 }: { size?: number }) {
+/**
+ * Marks for connectors that announce no icon of their own. The SDK
+ * connectors we configure (Coinbase, WalletConnect) never come with an
+ * EIP-6963 icon, so their official marks live here (Simple Icons, CC0);
+ * anything else gets the generic wallet glyph.
+ */
+export function WalletFallbackMark({
+  id,
+  size = 20,
+}: {
+  id?: string;
+  size?: number;
+}) {
+  if (id === "coinbaseWalletSDK") {
+    return (
+      <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+        <circle cx="12" cy="12" r="12" fill="#0052FF" />
+        <path
+          fill="#fff"
+          fillRule="evenodd"
+          d="M12 4.8a7.2 7.2 0 1 0 0 14.4 7.2 7.2 0 0 0 0-14.4zM9.6 9.9a.3.3 0 0 1 .3-.3h4.2a.3.3 0 0 1 .3.3v4.2a.3.3 0 0 1-.3.3H9.9a.3.3 0 0 1-.3-.3V9.9z"
+        />
+      </svg>
+    );
+  }
+  if (id === "walletConnect") {
+    return (
+      <svg viewBox="0 0 24 24" width={size} height={size} aria-hidden="true">
+        <path
+          fill="#3B99FC"
+          d="M4.913 7.519c3.915-3.831 10.26-3.831 14.174 0l.471.461a.483.483 0 0 1 0 .694l-1.611 1.577a.252.252 0 0 1-.354 0l-.649-.634c-2.73-2.673-7.157-2.673-9.887 0l-.694.68a.255.255 0 0 1-.355 0L4.397 8.719a.482.482 0 0 1 0-.693l.516-.507Zm17.506 3.263 1.434 1.404a.483.483 0 0 1 0 .694l-6.466 6.331a.508.508 0 0 1-.709 0l-4.588-4.493a.126.126 0 0 0-.178 0l-4.589 4.493a.508.508 0 0 1-.709 0L.147 12.88a.483.483 0 0 1 0-.694l1.434-1.404a.508.508 0 0 1 .709 0l4.589 4.493c.05.048.129.048.178 0l4.589-4.493a.508.508 0 0 1 .708 0l4.589 4.493c.05.048.128.048.178 0l4.589-4.493a.507.507 0 0 1 .709 0Z"
+        />
+      </svg>
+    );
+  }
   return (
     <svg
       viewBox="0 0 24 24"
