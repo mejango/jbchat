@@ -287,7 +287,9 @@ export async function enrollDevice(input: {
     purpose: "enroll-messaging-device",
     scope: {
       kind: "wallet-challenge-scope.v1",
-      project: null,
+      // Device enrollment is not project-scoped, but the challenge scope
+      // requires a stable string; the service tenant name is that anchor.
+      project: "juicebox-messaging",
       action: "enroll-messaging-device",
     },
     installationKind: "native",

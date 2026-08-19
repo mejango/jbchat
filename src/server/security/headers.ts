@@ -307,7 +307,7 @@ export function buildContentSecurityPolicy(
         : // lit-html is WalletConnect's modal (web components); wcm is its
           // policy name in newer releases. Both only ever template their
           // own shadow DOM.
-          "trusted-types nextjs nextjs#bundler juicebox-messaging#service-worker lit-html wcm",
+          "trusted-types nextjs nextjs#bundler juicebox-messaging#service-worker lit-html wcm default",
       "upgrade-insecure-requests",
     );
   }

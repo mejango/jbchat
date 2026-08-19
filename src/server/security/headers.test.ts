@@ -129,7 +129,7 @@ describe("buildWebSecurityHeaderRules", () => {
     expect(csp).toContain("script-src-attr 'none'");
     expect(csp).toContain("style-src-attr 'none'");
     expect(csp).toContain(
-      "trusted-types nextjs nextjs#bundler juicebox-messaging#service-worker lit-html wcm",
+      "trusted-types nextjs nextjs#bundler juicebox-messaging#service-worker lit-html wcm default",
     );
     expect(csp).not.toContain("allow-duplicates");
     expect(csp).not.toContain("'allow-duplicates'");

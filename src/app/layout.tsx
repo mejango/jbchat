@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import { connection } from "next/server";
 import type { ReactNode } from "react";
 import { PwaRegistration } from "@/components/PwaRegistration";
+import { TrustedTypesPolicy } from "@/components/TrustedTypesPolicy";
 import "./globals.css";
 import "./family.css";
 
@@ -36,6 +37,7 @@ export default async function RootLayout({
     <html lang="en" data-brand="juicebox"
       className={`${beatrice.variable} ${agrandir.variable}`}>
       <body>
+        <TrustedTypesPolicy />
         {children}
         <PwaRegistration
           requiresTrustedScriptUrl={
