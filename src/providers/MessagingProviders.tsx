@@ -44,7 +44,7 @@ function connectors(): CreateConnectorFn[] {
           description: "Private project support over Juicebox",
           url:
             typeof window === "undefined"
-              ? "https://juicebox.chat"
+              ? "https://fruitful.chat"
               : window.location.origin,
           icons: [],
         },
