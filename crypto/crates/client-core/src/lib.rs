@@ -163,6 +163,34 @@ where
     Ok(SyntheticIdentity { credential, signer })
 }
 
+/// Load a previously stored synthetic identity back from the provider's
+/// storage. The caller supplies the label and the Ed25519 public key it
+/// recorded at creation time; the private half never leaves storage.
+pub fn load_synthetic_identity<S>(
+    provider: &ProfileProvider<S>,
+    label: &str,
+    signature_public_key: &[u8],
+) -> Result<SyntheticIdentity, Error>
+where
+    S: StorageProvider<CURRENT_VERSION>,
+{
+    let identity = synthetic_credential_content(label)?;
+    let signer = SignatureKeyPair::read(
+        provider.storage(),
+        signature_public_key,
+        SignatureScheme::ED25519,
+    )
+    .ok_or(Error::StorageOperationFailed)?;
+    if signer.public() != signature_public_key {
+        return Err(Error::CryptoOperationFailed);
+    }
+    let credential = CredentialWithKey {
+        credential: BasicCredential::new(identity).into(),
+        signature_key: signer.to_public_vec().into(),
+    };
+    Ok(SyntheticIdentity { credential, signer })
+}
+
 /// Capabilities emitted by every lab leaf and KeyPackage. Nothing is inferred
 /// from provider defaults.
 pub fn profile_capabilities() -> Capabilities {

@@ -163,6 +163,15 @@ export interface MessagingHttpHandlers {
     request: Request,
     conversationId: string,
   ) => Promise<Response>;
+  readonly readEnvelope: (
+    request: Request,
+    conversationId: string,
+    envelopeId: string,
+  ) => Promise<Response>;
+  readonly listInstallationWelcomes: (
+    request: Request,
+    installationId: string,
+  ) => Promise<Response>;
   readonly policyWitnessSync: (request: Request) => Promise<Response>;
   readonly registerPushEndpoint: (
     request: Request,
@@ -1320,6 +1329,85 @@ export function createMessagingHttpHandlers(
                 policyHeadHash: b64u(row.policy_head_hash),
                 witnessState: String(row.witness_state),
               },
+      });
+    },
+
+    async readEnvelope(
+      request: Request,
+      conversationId: string,
+      envelopeId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      if (!UUID_PATTERN.test(conversationId) || !UUID_PATTERN.test(envelopeId)) {
+        return notFound();
+      }
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const rows = await wired.sql`
+        SELECT e.position, e.envelope_class, e.content_type,
+               e.sender_type, e.sender_account_id, e.sender_installation_id,
+               encode(e.envelope_bytes, 'base64') AS envelope
+        FROM memberships m
+        JOIN envelopes e ON e.conversation_id = m.conversation_id
+        WHERE m.conversation_id = ${conversationId}
+          AND m.installation_id = ${session.installationId}
+          AND e.envelope_id = ${envelopeId}`;
+      if (rows.length !== 1) return notFound();
+      const row = rows[0];
+      return jsonNoStore(200, {
+        conversationId,
+        envelopeId,
+        position: String(row.position),
+        envelopeClass: String(row.envelope_class),
+        contentType: String(row.content_type),
+        sender: {
+          type: String(row.sender_type),
+          accountId:
+            row.sender_account_id === null
+              ? null
+              : String(row.sender_account_id),
+          installationId:
+            row.sender_installation_id === null
+              ? null
+              : String(row.sender_installation_id),
+        },
+        envelope: Buffer.from(
+          String(row.envelope).replace(/\s/g, ""),
+          "base64",
+        ).toString("base64url"),
+      });
+    },
+
+    async listInstallationWelcomes(
+      request: Request,
+      installationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      if (!UUID_PATTERN.test(installationId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      if (session.installationId !== installationId) {
+        return problem(403, "installation_mismatch");
+      }
+      const rows = await wired.sql`
+        SELECT conversation_id, commit_position, commit_envelope_id,
+               encode(welcome_bytes, 'base64') AS welcome
+        FROM mls_welcomes
+        WHERE target_installation_id = ${installationId}
+        ORDER BY created_at
+        LIMIT 50`;
+      return jsonNoStore(200, {
+        welcomes: rows.map((row) => ({
+          conversationId: String(row.conversation_id),
+          commitPosition: String(row.commit_position),
+          commitEnvelopeId: String(row.commit_envelope_id),
+          welcome: Buffer.from(
+            String(row.welcome).replace(/\s/g, ""),
+            "base64",
+          ).toString("base64url"),
+        })),
       });
     },
 

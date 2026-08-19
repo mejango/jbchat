@@ -41,7 +41,8 @@
     "check:release:prerequisites": "node scripts/check-release-supply-chain.mjs release",
     "check:release": "npm run check:release:prerequisites && node scripts/check-verification-evidence.mjs --mode promotion",
     "witness:migrate": "node scripts/witness/migrate.mjs",
-    "mls:lab": "node scripts/mls/run-bridge-lab.mjs"
+    "mls:lab": "node scripts/mls/run-bridge-lab.mjs",
+    "mls:wasm": "RUSTFLAGS='--cfg getrandom_backend=\"wasm_js\"' wasm-pack build crypto/crates/wasm-client --target web --release --out-name jbm_mls_client && cp crypto/crates/wasm-client/pkg/jbm_mls_client.js crypto/crates/wasm-client/pkg/jbm_mls_client.d.ts crypto/crates/wasm-client/pkg/jbm_mls_client_bg.wasm src/lib/messaging/mlsWasm/"
   },
   "dependencies": {
     "@coinbase/wallet-sdk": "^4.3.7",

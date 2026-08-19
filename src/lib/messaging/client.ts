@@ -6,15 +6,16 @@
  * on every authenticated call, and typed access to the /v1 API. Private
  * keys never leave WebCrypto; the possession/DPoP key is generated
  * non-extractable and persisted as a CryptoKey in IndexedDB. The initial
- * KeyPackage published at enrollment is a clearly labeled
- * jbm-pre-mls-client/v1 transitional record around the real Ed25519
+ * KeyPackage published at enrollment is a real MLS KeyPackage from
+ * the wasm client core, bound to the device's Ed25519
  * credential key - MLS clients reject and replace it; nothing pretends
  * to be RFC 9420 bytes.
  */
 
+import { idbGet, idbSet } from "./idb";
+import { generateMlsKeyPackage, mlsSignaturePublicKey } from "./mls";
+
 const MEDIA_TYPE = "application/vnd.juicebox.messaging.v1+json";
-const DB_NAME = "jbm-messaging-keys";
-const STORE = "keys";
 const REFRESH_KEY = "jbm-messaging-refresh-v1";
 const WALLET_KEY = "jbm-messaging-wallet-v1";
 
@@ -27,7 +28,6 @@ export interface MessagingSession {
 
 interface KeyRecord {
   readonly authKeyPair: CryptoKeyPair;
-  readonly mlsKeyPair: CryptoKeyPair;
   readonly installationId: string;
   readonly accountId: string;
 }
@@ -56,36 +56,6 @@ export function getSession(): MessagingSession {
 
 export function getSessionServerSnapshot(): MessagingSession {
   return { status: "none", accountId: null, installationId: null, walletAddress: null };
-}
-
-function openKeyDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function idbGet<T>(key: string): Promise<T | undefined> {
-  const db = await openKeyDb();
-  return new Promise((resolve, reject) => {
-    const request = db.transaction(STORE).objectStore(STORE).get(key);
-    request.onsuccess = () => resolve(request.result as T | undefined);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function idbSet(key: string, value: unknown): Promise<void> {
-  const db = await openKeyDb();
-  return new Promise((resolve, reject) => {
-    const request = db
-      .transaction(STORE, "readwrite")
-      .objectStore(STORE)
-      .put(value, key);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
-  });
 }
 
 function b64url(bytes: ArrayBuffer | Uint8Array): string {
@@ -200,6 +170,7 @@ export async function api(
   method: string,
   path: string,
   body?: unknown,
+  headers: Record<string, string> = {},
 ): Promise<Response> {
   const record = await idbGet<KeyRecord>("device");
   if (!record || !accessToken) {
@@ -210,6 +181,7 @@ export async function api(
   if (!active || !accessToken) return new Response(null, { status: 401 });
   const call = async (): Promise<Response> =>
     jsonRequest(method, path, body, {
+      ...headers,
       Authorization: `DPoP ${accessToken}`,
       DPoP: await dpopProof(active.authKeyPair, method, path, accessToken!),
     });
@@ -338,26 +310,15 @@ export async function enrollDevice(input: {
     false,
     ["sign"],
   );
-  let mlsKeyPair: CryptoKeyPair;
-  try {
-    mlsKeyPair = (await crypto.subtle.generateKey("Ed25519", false, [
-      "sign",
-    ])) as CryptoKeyPair;
-  } catch {
-    throw new Error("browser_missing_ed25519");
-  }
   const authJwk = (await crypto.subtle.exportKey(
     "jwk",
     authKeyPair.publicKey,
   )) as { x: string; y: string };
-  const mlsPublicRaw = new Uint8Array(
-    await crypto.subtle.exportKey("raw", mlsKeyPair.publicKey),
-  );
-  // Transitional labeled record, NOT MLS bytes; replaced by the MLS client.
-  const keyPackageBytes = new Uint8Array([
-    ...new TextEncoder().encode("jbm-pre-mls-client/v1 "),
-    ...mlsPublicRaw,
-  ]);
+  // Real MLS identity + KeyPackage from the wasm client core; the raw
+  // Ed25519 public key doubles as the credential public the service
+  // records.
+  const mlsPublicRaw = await mlsSignaturePublicKey();
+  const keyPackageBytes = await generateMlsKeyPackage();
 
   const challenged = await jsonRequest(
     "POST",
@@ -416,7 +377,6 @@ export async function enrollDevice(input: {
   };
   await idbSet("device", {
     authKeyPair,
-    mlsKeyPair,
     installationId: issued.installation.installationId,
     accountId: issued.account.accountId,
   } satisfies KeyRecord);
@@ -429,6 +389,23 @@ export async function enrollDevice(input: {
     installationId: issued.installation.installationId,
     walletAddress: input.walletAddress.toLowerCase(),
   };
+  // Stock the KeyPackage shelf so conversation plans can take fresh
+  // packages for this installation. Best-effort: enrollment stands
+  // either way, and the initial enrollment package is already on file.
+  // ponytail: no restock trigger yet - republish happens on re-enrollment.
+  try {
+    const keyPackages: { keyPackage: string }[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      keyPackages.push({ keyPackage: b64url(await generateMlsKeyPackage()) });
+    }
+    await api(
+      "POST",
+      `/v1/installations/${issued.installation.installationId}/key-packages`,
+      { keyPackages },
+    );
+  } catch {
+    // The shelf can restock later; do not fail enrollment.
+  }
   progress("done");
   emit();
 }

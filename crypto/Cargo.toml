@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/client-core", "crates/lab-store", "crates/lab-cli", "crates/service-bridge"]
+members = ["crates/client-core", "crates/lab-store", "crates/lab-cli", "crates/service-bridge", "crates/wasm-client"]
 resolver = "2"
 
 [workspace.package]

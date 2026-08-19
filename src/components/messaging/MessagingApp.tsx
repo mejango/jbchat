@@ -9,6 +9,14 @@ import {
   restoreSession,
   type EnrollmentProgress,
 } from "@/lib/messaging/client";
+import {
+  canDecrypt,
+  decryptedMessages,
+  sendMessage,
+  startConversation,
+  syncWelcomes,
+  type CachedMessage,
+} from "@/lib/messaging/conversation";
 import { truncateAddress } from "@/lib/messaging/identity";
 import {
   Avatar,
@@ -30,6 +38,7 @@ interface ConversationSummary {
 
 interface ConversationEvent {
   position: string;
+  envelopeId: string;
   envelopeClass: string;
   contentType: string;
   envelopeBytes: string;
@@ -198,6 +207,7 @@ function Inbox() {
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
+    await syncWelcomes().catch(() => undefined);
     const response = await api("GET", "/v1/conversations");
     if (!response.ok) {
       setError("Your inbox could not be loaded.");
@@ -246,10 +256,8 @@ function Inbox() {
             No conversations yet
           </h2>
           <p style={{ color: "var(--mx-smoke-700)" }}>
-            Claim a purchase receipt to unlock a private support channel with
-            that project&apos;s team. Opening the encrypted channel itself ships
-            with the device messaging core, which is rolling out - your
-            grant will be waiting.
+            Claim a purchase receipt to open a private, end-to-end encrypted
+            support channel with that project&apos;s team.
           </p>
         </section>
       ) : (
@@ -288,6 +296,23 @@ function Inbox() {
         <ClaimPurchaseDialog
           onClose={() => setClaimOpen(false)}
           onClaimed={() => void reload()}
+          onOpened={(conversationId) => {
+            setClaimOpen(false);
+            void reload().then(() => {
+              setSelected(
+                (current) =>
+                  current ?? {
+                    conversationId,
+                    state: "active",
+                    deliveryPurpose: "purchase_support",
+                    role: "customer",
+                    lastPosition: "1",
+                    lastActivityAt: "",
+                    project: { chainId: "", projectId: "" },
+                  },
+              );
+            });
+          }}
         />
       ) : null}
     </div>
@@ -302,22 +327,59 @@ function ConversationView({
   onBack: () => void;
 }) {
   const [events, setEvents] = useState<ConversationEvent[] | null>(null);
+  const [messages, setMessages] = useState<Record<string, CachedMessage>>({});
+  const [decryptable, setDecryptable] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      const response = await api(
-        "GET",
-        `/v1/conversations/${conversation.conversationId}/events`,
-      );
-      if (!response.ok) {
-        setError("This conversation\u2019s transcript could not be loaded.");
-        return;
-      }
-      const body = (await response.json()) as { events: ConversationEvent[] };
-      setEvents(body.events);
-    })();
+  const refresh = useCallback(async () => {
+    const response = await api(
+      "GET",
+      `/v1/conversations/${conversation.conversationId}/events`,
+    );
+    if (!response.ok) {
+      setError("This conversation’s transcript could not be loaded.");
+      return;
+    }
+    const body = (await response.json()) as { events: ConversationEvent[] };
+    setEvents(body.events);
+    setDecryptable(await canDecrypt(conversation.conversationId));
+    const decrypted = await decryptedMessages(
+      conversation.conversationId,
+      body.events,
+    );
+    setMessages(decrypted);
+    setError(null);
   }, [conversation.conversationId]);
+
+  useEffect(() => {
+    const kickoff = setTimeout(() => void refresh(), 0);
+    const timer = setInterval(() => void refresh(), 5000);
+    return () => {
+      clearTimeout(kickoff);
+      clearInterval(timer);
+    };
+  }, [refresh]);
+
+  const submit = useCallback(async () => {
+    const text = draft.trim();
+    if (!text || sending) return;
+    setSending(true);
+    try {
+      await sendMessage(conversation.conversationId, text);
+      setDraft("");
+      await refresh();
+    } catch (sendError) {
+      setError(
+        sendError instanceof Error && sendError.message === "policy_head_unwitnessed"
+          ? "The channel is still being co-signed by the transparency witness. Try again in a moment."
+          : "Your message could not be sent. Try again.",
+      );
+    } finally {
+      setSending(false);
+    }
+  }, [conversation.conversationId, draft, refresh, sending]);
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -329,37 +391,81 @@ function ConversationView({
           Project #{conversation.project.projectId} support
         </h1>
       </div>
-      <section className="mxCard" style={{ padding: "1.25rem" }}>
+      <section
+        className="mxCard"
+        style={{ padding: "1.25rem", display: "grid", gap: 8 }}
+      >
         {error ? <p className="mxError">{error}</p> : null}
         {events === null ? (
           <p className="mxHint">Loading transcript…</p>
         ) : (
-          <ol style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {events.map((event) => (
-              <li
-                key={event.position}
-                className="mxRow"
-                style={{ padding: "0.5rem 0" }}
-              >
-                <span className="mxChip">#{event.position}</span>
-                <span style={{ color: "var(--mx-smoke-700)" }}>
-                  {event.envelopeClass === "mls_commit"
-                    ? "Membership change (encrypted commit)"
-                    : event.envelopeClass === "external_proposal"
-                      ? "Roster proposal"
-                      : "Encrypted message"}{" "}
-                  · {event.envelopeBytes} bytes
-                </span>
-              </li>
-            ))}
+          <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
+            {events.map((event) => {
+              if (event.envelopeClass !== "application") {
+                return (
+                  <li key={event.position} className="mxHint" style={{ textAlign: "center" }}>
+                    Membership change · #{event.position}
+                  </li>
+                );
+              }
+              const message = messages[event.envelopeId];
+              const mine = message?.mine ?? false;
+              return (
+                <li
+                  key={event.position}
+                  style={{
+                    display: "flex",
+                    justifyContent: mine ? "flex-end" : "flex-start",
+                  }}
+                >
+                  <span
+                    style={{
+                      maxWidth: "75%",
+                      padding: "0.5rem 0.75rem",
+                      borderRadius: 12,
+                      background: mine ? "var(--mx-bluebs)" : "var(--mx-smoke-100)",
+                      color: mine ? "white" : "inherit",
+                      whiteSpace: "pre-wrap",
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    {message && message.text !== ""
+                      ? message.text
+                      : decryptable
+                        ? "Encrypted message"
+                        : "Encrypted on another device"}
+                  </span>
+                </li>
+              );
+            })}
           </ol>
         )}
-        <p className="mxHint" style={{ marginTop: 12 }}>
-          Message contents decrypt only on enrolled devices running the
-          messaging core. This device can verify the transcript&apos;s order and
-          integrity, which is what you see above.
-        </p>
       </section>
+      {decryptable ? (
+        <form
+          className="mxRow"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <input
+            className="mxInput"
+            style={{ flex: 1 }}
+            placeholder="Write a message…"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <button className="mxBtnPrimary" type="submit" disabled={sending || !draft.trim()}>
+            {sending ? "Sending…" : "Send"}
+          </button>
+        </form>
+      ) : (
+        <p className="mxHint">
+          This conversation’s keys live on the device that opened it.
+          Messages decrypt and send only there.
+        </p>
+      )}
     </div>
   );
 }
@@ -367,9 +473,11 @@ function ConversationView({
 function ClaimPurchaseDialog({
   onClose,
   onClaimed,
+  onOpened,
 }: {
   onClose: () => void;
   onClaimed: () => void;
+  onOpened: (conversationId: string) => void;
 }) {
   const { address, chainId } = useAccount();
   const [txHash, setTxHash] = useState("");
@@ -381,6 +489,7 @@ function ClaimPurchaseDialog({
   const [state, setState] = useState<
     | { phase: "form" }
     | { phase: "claiming" }
+    | { phase: "opening" }
     | { phase: "claimed"; capability: string; validUntil: string }
     | { phase: "error"; reason: string }
   >({ phase: "form" });
@@ -408,13 +517,25 @@ function ClaimPurchaseDialog({
             const body = (await response.json()) as {
               capability: string;
               validUntil: string;
+              claimHandle: string;
             };
-            setState({
-              phase: "claimed",
-              capability: body.capability,
-              validUntil: body.validUntil,
-            });
-            onClaimed();
+            // The grant is live: open the encrypted channel right away -
+            // plan, build the MLS group on this device, activate.
+            setState({ phase: "opening" });
+            try {
+              const conversationId = await startConversation(body.claimHandle);
+              onClaimed();
+              onOpened(conversationId);
+            } catch (openError) {
+              setState({
+                phase: "error",
+                reason:
+                  openError instanceof Error
+                    ? openError.message
+                    : "conversation_open_failed",
+              });
+              onClaimed();
+            }
             return;
           }
           const body = (await response
@@ -475,6 +596,11 @@ function ClaimPurchaseDialog({
             />
           </div>
         </div>
+        {state.phase === "opening" ? (
+          <p className="mxHint" style={{ margin: 0 }}>
+            Receipt verified. Opening your encrypted channel…
+          </p>
+        ) : null}
         {state.phase === "claimed" ? (
           <p style={{ color: "var(--mx-melon)", margin: 0 }}>
             Verified. Your {state.capability} grant is active until{" "}
@@ -493,9 +619,13 @@ function ClaimPurchaseDialog({
           <button
             type="submit"
             className="mxBtnPrimary"
-            disabled={state.phase === "claiming"}
+            disabled={state.phase === "claiming" || state.phase === "opening"}
           >
-            {state.phase === "claiming" ? "Verifying…" : "Verify receipt"}
+            {state.phase === "claiming"
+              ? "Verifying…"
+              : state.phase === "opening"
+                ? "Opening…"
+                : "Verify receipt"}
           </button>
         </div>
       </form>

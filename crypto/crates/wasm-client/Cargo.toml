@@ -1,0 +1,31 @@
+[package]
+name = "juicebox-messaging-wasm-client"
+version = "0.1.0"
+description = "Browser MLS client: the frozen-profile client core compiled to wasm32"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+juicebox-messaging-client-core = { path = "../client-core" }
+openmls = { workspace = true }
+openmls_memory_storage = { workspace = true }
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+wasm-bindgen = "=0.2.127"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+openmls = { workspace = true, features = ["js"] }
+getrandom_02 = { package = "getrandom", version = "=0.2.17", features = ["js"] }
+getrandom_04 = { package = "getrandom", version = "=0.4.3", features = ["wasm_js"] }
+
+[lints]
+workspace = true
+
+# ponytail: wasm-opt's prebuilt binary rejects this module's feature set;
+# release profile already runs LTO + strip, re-enable if size matters
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

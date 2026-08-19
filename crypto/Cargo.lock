@@ -553,8 +553,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -564,9 +566,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "rand_core 0.10.1",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -818,6 +822,19 @@ dependencies = [
  "juicebox-messaging-client-core",
  "openmls_memory_storage",
  "serde_json",
+]
+
+[[package]]
+name = "juicebox-messaging-wasm-client"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "getrandom 0.4.3",
+ "juicebox-messaging-client-core",
+ "openmls",
+ "openmls_memory_storage",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1199,6 +1216,7 @@ version = "0.9.0-rc.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69bc05fbaa221e0c90274a444ac9b90f46df015a6ff2e64a32aa5d5e8776f2a6"
 dependencies = [
+ "getrandom 0.4.3",
  "log",
  "openmls_serialization_helpers",
  "openmls_traits",
@@ -1207,6 +1225,7 @@ dependencies = [
  "serde_bytes",
  "thiserror",
  "tls_codec",
+ "web-time",
  "zeroize",
 ]
 
@@ -1933,6 +1952,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ef64dbcc55df09c7e5a46182d181c2cfa3e925f3da937ea764728b4bbb9dcbf"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "web-time"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

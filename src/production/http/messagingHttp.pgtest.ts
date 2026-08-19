@@ -1224,13 +1224,73 @@ describeStorage("messaging HTTP surface", () => {
       );
       expect(page.status).toBe(200);
       const events = (await page.json()) as {
-        events: { position: string; envelopeClass: string }[];
+        events: {
+          position: string;
+          envelopeId: string;
+          envelopeClass: string;
+        }[];
       };
       expect(events.events.map((event) => event.envelopeClass)).toEqual([
         "mls_commit",
         "application",
         "application",
       ]);
+
+      // The staff member reads the customer's ciphertext body by envelope
+      // id, and their own pending Welcome from the installation mailbox.
+      const applicationEvent = events.events[1];
+      const envelopeRead = await handlers8453.readEnvelope(
+        authedRequest(
+          projectOwner,
+          "GET",
+          `/v1/conversations/${activatedConversationId}/envelopes/${applicationEvent.envelopeId}`,
+        ),
+        activatedConversationId,
+        applicationEvent.envelopeId,
+      );
+      expect(envelopeRead.status).toBe(200);
+      const envelopeBody = (await envelopeRead.json()) as {
+        envelopeClass: string;
+        envelope: string;
+        sender: { installationId: string | null };
+      };
+      expect(envelopeBody.envelopeClass).toBe("application");
+      expect(envelopeBody.sender.installationId).toBe(customer.installationId);
+      expect(
+        Buffer.from(envelopeBody.envelope, "base64url").toString("utf8"),
+      ).toBe("opaque customer ciphertext");
+
+      const welcomesRead = await handlers8453.listInstallationWelcomes(
+        authedRequest(
+          projectOwner,
+          "GET",
+          `/v1/installations/${projectOwner.installationId}/welcomes`,
+        ),
+        projectOwner.installationId,
+      );
+      expect(welcomesRead.status).toBe(200);
+      const welcomes = (await welcomesRead.json()) as {
+        welcomes: { conversationId: string; welcome: string }[];
+      };
+      expect(
+        welcomes.welcomes.some(
+          (entry) =>
+            entry.conversationId === activatedConversationId &&
+            Buffer.from(entry.welcome, "base64url").toString("utf8") ===
+              "activation-welcome",
+        ),
+      ).toBe(true);
+
+      // Another member cannot read someone else's mailbox.
+      const crossRead = await handlers8453.listInstallationWelcomes(
+        authedRequest(
+          customer,
+          "GET",
+          `/v1/installations/${projectOwner.installationId}/welcomes`,
+        ),
+        projectOwner.installationId,
+      );
+      expect(crossRead.status).toBe(403);
     } finally {
       await witnessSql3.end({ timeout: 5 });
     }
