@@ -58,6 +58,7 @@ import {
   runPolicyWitnessSync,
   type PolicyWitnessSubmitPort,
 } from "../witness/policyWitnessSync";
+import { rotateExternalSenderCredentials } from "../storage/externalSenderRotation";
 import { readCallAtFinalized } from "../chain/quorumReads";
 import { computeKeyPackageRef } from "../identity/identityCrypto";
 import {
@@ -173,6 +174,7 @@ export interface MessagingHttpHandlers {
     installationId: string,
   ) => Promise<Response>;
   readonly policyWitnessSync: (request: Request) => Promise<Response>;
+  readonly externalSenderRotation: (request: Request) => Promise<Response>;
   readonly registerPushEndpoint: (
     request: Request,
     installationId: string,
@@ -235,6 +237,7 @@ export function createMessagingHttpHandlers(
       readonly manifestId: string;
     } | null;
     readonly plans: ConversationPlanStore | null;
+    readonly provisioningSeed: Buffer | null;
     readonly chainRegistry: ChainTransportRegistry | null;
     readonly deliveryStore: PostgresDeliveryAppendStore;
     readonly appendKeys: {
@@ -343,6 +346,7 @@ export function createMessagingHttpHandlers(
       trust: config.provisioningSeed
         ? serviceTrustContext(config.provisioningSeed)
         : null,
+      provisioningSeed: config.provisioningSeed ?? null,
       policyWitnessSubmit:
         contextValue.policyWitnessSubmit ??
         (process.env.JBM_WITNESS_URL && process.env.JBM_WITNESS_SUBMIT_TOKEN
@@ -1424,6 +1428,23 @@ export function createMessagingHttpHandlers(
       const report = await runPolicyWitnessSync(
         wired.sql,
         wired.policyWitnessSubmit,
+      );
+      return jsonNoStore(200, report);
+    },
+
+    async externalSenderRotation(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.provisioningSeed || !wired.internalSyncToken) {
+        return notFound();
+      }
+      const authorization = request.headers.get("authorization");
+      if (authorization !== `Bearer ${wired.internalSyncToken}`) {
+        return problem(401, "unauthorized");
+      }
+      const report = await rotateExternalSenderCredentials(
+        wired.sql,
+        wired.provisioningSeed,
       );
       return jsonNoStore(200, report);
     },

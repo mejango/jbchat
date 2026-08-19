@@ -60,4 +60,32 @@ if (process.env.JBM_INTERNAL_SYNC_URL && process.env.JBM_INTERNAL_SYNC_TOKEN) {
     }
   };
   void loop();
+
+  // External-sender credential aging shares the sync route's origin and
+  // token; a six-hour cadence is generous against 14-day windows.
+  const rotationUrl = new URL(process.env.JBM_INTERNAL_SYNC_URL);
+  rotationUrl.pathname = "/v1/internal/external-sender-rotation";
+  const rotationLoop = async () => {
+    for (;;) {
+      try {
+        const response = await fetch(rotationUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.JBM_INTERNAL_SYNC_TOKEN}`,
+          },
+          signal: AbortSignal.timeout(60_000),
+        });
+        const report = await response.json();
+        if (report.promoted || report.retired) {
+          console.log(
+            `External-sender rotation: ${report.promoted} promoted, ${report.retired} retired.`,
+          );
+        }
+      } catch (error) {
+        console.error("External-sender rotation failed:", String(error));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 6 * 60 * 60 * 1_000));
+    }
+  };
+  void rotationLoop();
 }

@@ -107,13 +107,13 @@ export interface ConversationPlanStore {
  * the delivery log key, per-target Welcomes, mailbox items, the base
  * page-end projection, and the custody digest fence.
  *
- * Launch-mode boundaries stated plainly: per-project external-sender
+ * Launch-mode boundary stated plainly: per-project external-sender
  * credentials and policy-head signing keys are derived deterministically
- * from the provisioning seed at first use (no 30-day witness aging yet);
- * issued heads are unwitnessed until the policy-log witness producer
- * exists; and the custody fence still covers exactly one send grant, so
- * v1 grants sending to the CREATOR - staff replies arrive with the
- * per-sender fence refactor recorded in the ledger.
+ * from the provisioning seed. Their aging lifecycle (90-day cap, staged
+ * next generation, 14-day overlap, retirement) runs in
+ * externalSenderRotation.ts via the keeper; issued heads are witnessed
+ * through the policy-log producer below plus runPolicyWitnessSync; and
+ * every member holds a per-sender custody fence, so all members send.
  */
 export function createConversationPlanStore(
   context: ConversationPlanStoreContext,
@@ -488,16 +488,36 @@ export function createConversationPlanStore(
           .update("jb-msg-plan-roster/v1", "utf8")
           .update(JSON.stringify(roster), "utf8")
           .digest();
+        // Generations are read from the credential rows: the rotation
+        // pass advances them past the provisioned 1/2 pair.
+        const senderGenerations = await tx`
+          SELECT external_sender_credential_id, signer_generation
+          FROM external_sender_credentials
+          WHERE external_sender_credential_id IN (
+            ${String(provision.current_external_sender_credential_id)},
+            ${String(provision.staged_external_sender_credential_id)}
+          )`;
+        const generationOf = (credentialId: string): string => {
+          const row = senderGenerations.find(
+            (candidate) =>
+              String(candidate.external_sender_credential_id) === credentialId,
+          );
+          return row ? String(row.signer_generation) : "1";
+        };
         const externalSenders = {
           current: {
             credentialId: String(
               provision.current_external_sender_credential_id,
             ),
-            signerGeneration: "1",
+            signerGeneration: generationOf(
+              String(provision.current_external_sender_credential_id),
+            ),
           },
           stagedNext: {
             credentialId: String(provision.staged_external_sender_credential_id),
-            signerGeneration: "2",
+            signerGeneration: generationOf(
+              String(provision.staged_external_sender_credential_id),
+            ),
           },
         };
         const externalSendersHash = createHash("sha256")
@@ -943,7 +963,8 @@ export function createConversationPlanStore(
           signer: policyHeadSignerFor(projectRefId),
         });
         const currentSender = await tx`
-          SELECT encode(credential_fingerprint, 'base64') AS fp
+          SELECT encode(credential_fingerprint, 'base64') AS fp,
+                 signer_generation
           FROM external_sender_credentials
           WHERE external_sender_credential_id =
                 ${String(provision.current_external_sender_credential_id)}`;
@@ -1026,7 +1047,7 @@ export function createConversationPlanStore(
           activeExternalSenderFingerprint: b64ToUrl(
             String(currentSender[0].fp),
           ),
-          activeSignerGeneration: "1",
+          activeSignerGeneration: String(currentSender[0].signer_generation),
           directoryCheckpointId: String(provision.directory_checkpoint_id),
           policyLogCheckpointId: String(provision.policy_log_checkpoint_id),
           mandatoryProposals: [],
