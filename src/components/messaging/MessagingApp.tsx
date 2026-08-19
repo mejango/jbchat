@@ -17,6 +17,12 @@ import {
   syncWelcomes,
   type CachedMessage,
 } from "@/lib/messaging/conversation";
+import {
+  disablePush,
+  enablePush,
+  pushState,
+  type PushState,
+} from "@/lib/messaging/push";
 import { truncateAddress } from "@/lib/messaging/identity";
 import {
   Avatar,
@@ -243,9 +249,12 @@ function Inbox() {
         <h1 className="mxDisplay" style={{ margin: 0, fontSize: 20 }}>
           Messages
         </h1>
-        <button className="mxBtnSecondary" onClick={() => setClaimOpen(true)}>
-          Claim a purchase
-        </button>
+        <div className="mxRow">
+          <PushToggle />
+          <button className="mxBtnSecondary" onClick={() => setClaimOpen(true)}>
+            Claim a purchase
+          </button>
+        </div>
       </div>
       {error ? <p className="mxError">{error}</p> : null}
       {conversations === null ? (
@@ -316,6 +325,40 @@ function Inbox() {
         />
       ) : null}
     </div>
+  );
+}
+
+function PushToggle() {
+  const [state, setState] = useState<PushState | "unknown">("unknown");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(
+      () => void pushState().then(setState).catch(() => setState("unavailable")),
+      0,
+    );
+    return () => clearTimeout(timer);
+  }, []);
+
+  if (state === "unknown" || state === "unavailable") return null;
+  if (state === "denied") {
+    return <span className="mxHint">Notifications blocked in browser settings</span>;
+  }
+  return (
+    <button
+      className="mxBtnSecondary"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          setState(state === "on" ? await disablePush() : await enablePush());
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      {state === "on" ? "Notifications on" : "Notify me"}
+    </button>
   );
 }
 
