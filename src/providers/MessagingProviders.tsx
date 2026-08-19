@@ -44,7 +44,7 @@ function connectors(): CreateConnectorFn[] {
           description: "Private project support over Juicebox",
           url:
             typeof window === "undefined"
-              ? "https://app-production-bbdd.up.railway.app"
+              ? "https://juicebox.chat"
               : window.location.origin,
           icons: [],
         },
