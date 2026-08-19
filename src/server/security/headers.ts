@@ -234,15 +234,50 @@ export function buildContentSecurityPolicy(
   documentKind: DocumentKind = "top-level",
 ): string {
   const development = runtimeEnvironment === "development";
-  const connectSources = development ? "'self' ws: wss:" : "'self'";
+  // The wallet sign-in providers (Para's MPC + WalletConnect/AppKit) talk to
+  // their own backends from the top-level document. The embed surface never
+  // runs sign-in, so it keeps the locked-down default.
+  const walletAuthConnect =
+    documentKind === "embed"
+      ? []
+      : [
+          "https://*.getpara.com",
+          "wss://*.getpara.com",
+          "https://*.usecapsule.com",
+          "wss://*.usecapsule.com",
+          "https://*.walletconnect.com",
+          "https://*.walletconnect.org",
+          "wss://*.walletconnect.com",
+          "wss://*.walletconnect.org",
+          "https://*.web3modal.org",
+          "wss://*.web3modal.org",
+          "https://*.wallet.coinbase.com",
+          "wss://www.walletlink.org",
+        ];
+  const connectSources = [
+    development ? "'self' ws: wss:" : "'self'",
+    ...walletAuthConnect,
+  ].join(" ");
   const scriptSources = buildScriptSources(config, development, nonce);
   const styleSources = buildStyleSources(config, development, nonce);
+  const walletAuthFrames =
+    documentKind === "embed"
+      ? []
+      : [
+          "https://verify.walletconnect.com",
+          "https://verify.walletconnect.org",
+          "https://*.getpara.com",
+          "https://*.usecapsule.com",
+        ];
   const frameSources =
     documentKind === "embed"
       ? "'none'"
-      : config.mode === "local-lab"
-      ? ["'self'", ...config.localLabOrigins].join(" ")
-      : "'self'";
+      : [
+          config.mode === "local-lab"
+            ? ["'self'", ...config.localLabOrigins].join(" ")
+            : "'self'",
+          ...walletAuthFrames,
+        ].join(" ");
   const formAction = documentKind === "embed" ? "'none'" : "'self'";
 
   const directives = [
