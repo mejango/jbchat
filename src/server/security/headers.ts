@@ -269,7 +269,10 @@ export function buildContentSecurityPolicy(
       "require-trusted-types-for 'script'",
       documentKind === "embed"
         ? "trusted-types nextjs nextjs#bundler"
-        : "trusted-types nextjs nextjs#bundler juicebox-messaging#service-worker",
+        : // lit-html is WalletConnect's modal (web components); wcm is its
+          // policy name in newer releases. Both only ever template their
+          // own shadow DOM.
+          "trusted-types nextjs nextjs#bundler juicebox-messaging#service-worker lit-html wcm",
       "upgrade-insecure-requests",
     );
   }
