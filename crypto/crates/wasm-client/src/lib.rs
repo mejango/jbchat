@@ -214,6 +214,57 @@ impl MlsClient {
         })
     }
 
+    /// Add several members in ONE Add Commit. `key_packages` is a
+    /// concatenation of serialized KeyPackages, each prefixed with its
+    /// u32 big-endian byte length; the single returned Welcome serves
+    /// every invitee.
+    #[wasm_bindgen(js_name = addMembers)]
+    pub fn add_members(
+        &self,
+        group_id: &[u8],
+        key_packages: &[u8],
+    ) -> Result<AddMemberOutput, JsError> {
+        let mut group =
+            core_mls::load_group(&self.provider, &GroupId::from_slice(group_id)).map_err(fail)?;
+        let mut decoded = Vec::new();
+        let mut offset = 0usize;
+        while offset < key_packages.len() {
+            if key_packages.len() - offset < 4 {
+                return Err(state_fail("key package list is malformed"));
+            }
+            let length = u32::from_be_bytes(
+                key_packages[offset..offset + 4]
+                    .try_into()
+                    .map_err(|_| state_fail("key package list is malformed"))?,
+            ) as usize;
+            offset += 4;
+            if key_packages.len() - offset < length {
+                return Err(state_fail("key package list is malformed"));
+            }
+            decoded.push(
+                core_mls::decode_key_package(
+                    &self.provider,
+                    &key_packages[offset..offset + length],
+                )
+                .map_err(fail)?,
+            );
+            offset += length;
+        }
+        let (commit, welcome) =
+            core_mls::add_members(&mut group, &self.provider, &self.identity, &decoded)
+                .map_err(fail)?;
+        Ok(AddMemberOutput {
+            commit,
+            welcome,
+            epoch: group.epoch().as_u64(),
+            confirmed_transcript_hash: group
+                .public_group()
+                .group_context()
+                .confirmed_transcript_hash()
+                .to_vec(),
+        })
+    }
+
     /// Join a group from a serialized Welcome; returns the group id.
     #[wasm_bindgen(js_name = joinFromWelcome)]
     pub fn join_from_welcome(&self, welcome: &[u8]) -> Result<Vec<u8>, JsError> {
@@ -320,6 +371,48 @@ mod tests {
                 .open_application(&group_id, &reply)
                 .expect("read reply"),
             b"reply from restored state",
+        );
+    }
+
+    #[test]
+    fn plural_add_members_yields_one_commit_and_one_welcome_for_all() {
+        let alice = MlsClient::new("creator-1").expect("alice");
+        let bob = MlsClient::new("member-2").expect("bob");
+        let carol = MlsClient::new("member-3").expect("carol");
+        let group_id = [0x51u8; 32];
+
+        let mut list = Vec::new();
+        for member in [&bob, &carol] {
+            let package = member.generate_key_package().expect("key package");
+            list.extend_from_slice(&u32::try_from(package.len()).expect("length").to_be_bytes());
+            list.extend_from_slice(&package);
+        }
+        alice.create_group(&group_id).expect("create");
+        let added = alice.add_members(&group_id, &list).expect("add members");
+        assert_eq!(added.epoch, 1);
+
+        // The SAME Welcome bytes admit both invitees.
+        assert_eq!(
+            bob.join_from_welcome(&added.welcome).expect("bob"),
+            group_id
+        );
+        assert_eq!(
+            carol.join_from_welcome(&added.welcome).expect("carol"),
+            group_id,
+        );
+        let sealed = alice
+            .seal_application(&group_id, b"hello everyone")
+            .expect("seal");
+        // Each member decrypts its own copy of the ciphertext.
+        assert_eq!(
+            bob.open_application(&group_id, &sealed).expect("bob reads"),
+            b"hello everyone",
+        );
+        assert_eq!(
+            carol
+                .open_application(&group_id, &sealed)
+                .expect("carol reads"),
+            b"hello everyone",
         );
     }
 }

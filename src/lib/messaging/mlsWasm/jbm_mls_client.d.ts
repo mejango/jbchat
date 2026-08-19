@@ -25,6 +25,13 @@ export class MlsClient {
      */
     addMember(group_id: Uint8Array, key_package: Uint8Array): AddMemberOutput;
     /**
+     * Add several members in ONE Add Commit. `key_packages` is a
+     * concatenation of serialized KeyPackages, each prefixed with its
+     * u32 big-endian byte length; the single returned Welcome serves
+     * every invitee.
+     */
+    addMembers(group_id: Uint8Array, key_packages: Uint8Array): AddMemberOutput;
+    /**
      * Create a new group under the caller-chosen group id.
      */
     createGroup(group_id: Uint8Array): void;
@@ -87,6 +94,7 @@ export interface InitOutput {
     readonly __wbg_set_addmemberoutput_epoch: (a: number, b: bigint) => void;
     readonly __wbg_set_addmemberoutput_welcome: (a: number, b: number, c: number) => void;
     readonly mlsclient_addMember: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly mlsclient_addMembers: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly mlsclient_createGroup: (a: number, b: number, c: number, d: number) => void;
     readonly mlsclient_credentialLabel: (a: number, b: number) => void;
     readonly mlsclient_exportState: (a: number, b: number) => void;

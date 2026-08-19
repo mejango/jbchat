@@ -154,6 +154,34 @@ export class MlsClient {
         }
     }
     /**
+     * Add several members in ONE Add Commit. `key_packages` is a
+     * concatenation of serialized KeyPackages, each prefixed with its
+     * u32 big-endian byte length; the single returned Welcome serves
+     * every invitee.
+     * @param {Uint8Array} group_id
+     * @param {Uint8Array} key_packages
+     * @returns {AddMemberOutput}
+     */
+    addMembers(group_id, key_packages) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(key_packages, wasm.__wbindgen_export3);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.mlsclient_addMembers(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return AddMemberOutput.__wrap(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Create a new group under the caller-chosen group id.
      * @param {Uint8Array} group_id
      */

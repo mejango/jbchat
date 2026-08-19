@@ -11,10 +11,11 @@
 import { api, getSession } from "./client";
 import { idbGet, idbSet } from "./idb";
 import {
-  addMlsMember,
+  addMlsMembers,
   createMlsGroup,
   joinMlsWelcome,
   openMlsApplication,
+  processMlsCommit,
   sealMlsApplication,
 } from "./mls";
 
@@ -57,20 +58,47 @@ function fromHex(value: string): Uint8Array {
   return bytes;
 }
 
-type GroupMap = Record<string, string>;
+interface GroupRecord {
+  groupId: string;
+  // The commit position this device's group state already covers:
+  // the genesis commit for the creator, the Welcome's commit for a
+  // joiner, then advanced as later commits are processed.
+  processedPosition: string;
+}
+
+type GroupMap = Record<string, string | GroupRecord>;
+
+function asRecord(
+  stored: string | GroupRecord | undefined,
+): GroupRecord | null {
+  if (!stored) return null;
+  // Legacy entries stored the bare hex group id; they predate follower
+  // commits, so position 1 (the genesis commit) is covered.
+  if (typeof stored === "string") {
+    return { groupId: stored, processedPosition: "1" };
+  }
+  return stored;
+}
+
+async function groupRecordFor(
+  conversationId: string,
+): Promise<GroupRecord | null> {
+  const map = (await idbGet<GroupMap>(GROUP_MAP_KEY)) ?? {};
+  return asRecord(map[conversationId]);
+}
 
 async function groupIdFor(conversationId: string): Promise<Uint8Array | null> {
-  const map = (await idbGet<GroupMap>(GROUP_MAP_KEY)) ?? {};
-  const stored = map[conversationId];
-  return stored ? fromHex(stored) : null;
+  const record = await groupRecordFor(conversationId);
+  return record ? fromHex(record.groupId) : null;
 }
 
 async function rememberGroup(
   conversationId: string,
   groupId: Uint8Array,
+  processedPosition: string,
 ): Promise<void> {
   const map = (await idbGet<GroupMap>(GROUP_MAP_KEY)) ?? {};
-  map[conversationId] = hex(groupId);
+  map[conversationId] = { groupId: hex(groupId), processedPosition };
   await idbSet(GROUP_MAP_KEY, map);
 }
 
@@ -151,18 +179,20 @@ export async function startConversation(claimHandle: string): Promise<string> {
   const welcomeTargets = plan.roster.filter(
     (member) => member.bootstrapMode === "welcome",
   );
-  // ponytail: one Add Commit per activation; support conversations have a
-  // single staff installation today. Multi-device staff needs a
-  // multi-KeyPackage addMembers in the wasm core.
-  if (welcomeTargets.length !== 1 || !welcomeTargets[0].keyPackage) {
+  if (
+    welcomeTargets.length === 0 ||
+    welcomeTargets.some((member) => !member.keyPackage)
+  ) {
     throw new Error("unsupported_roster_shape");
   }
 
   const groupId = crypto.getRandomValues(new Uint8Array(32));
   await createMlsGroup(groupId);
-  const added = await addMlsMember(
+  // One Add Commit covers every staff installation; the single Welcome
+  // serves them all.
+  const added = await addMlsMembers(
     groupId,
-    fromB64url(welcomeTargets[0].keyPackage),
+    welcomeTargets.map((member) => fromB64url(member.keyPackage!)),
   );
   const commit = added.commit;
   const commitSha = new Uint8Array(
@@ -188,13 +218,11 @@ export async function startConversation(claimHandle: string): Promise<string> {
         commit: b64url(commit),
         envelopeSha256: b64url(commitSha),
         resultingConfirmedTranscriptHash: b64url(added.confirmedTranscriptHash),
-        welcomeByInstallation: [
-          {
-            installationId: welcomeTargets[0].installationId,
-            welcome: b64url(added.welcome),
-            welcomeSha256: b64url(welcomeSha),
-          },
-        ],
+        welcomeByInstallation: welcomeTargets.map((member) => ({
+          installationId: member.installationId,
+          welcome: b64url(added.welcome),
+          welcomeSha256: b64url(welcomeSha),
+        })),
       },
     },
     { "If-Match": `"plan-${plan.planId}-1"` },
@@ -202,7 +230,7 @@ export async function startConversation(claimHandle: string): Promise<string> {
   if (activated.status !== 201) {
     throw new Error(await reason(activated, "activation_refused"));
   }
-  await rememberGroup(plan.conversationId, groupId);
+  await rememberGroup(plan.conversationId, groupId, "1");
   return plan.conversationId;
 }
 
@@ -219,12 +247,17 @@ export async function syncWelcomes(): Promise<void> {
   );
   if (!response.ok) return;
   const body = (await response.json()) as {
-    welcomes: { conversationId: string; welcome: string }[];
+    welcomes: {
+      conversationId: string;
+      welcome: string;
+      commitPosition: string;
+    }[];
   };
   for (const entry of body.welcomes) {
     if ((await groupIdFor(entry.conversationId)) !== null) continue;
     const groupId = await joinMlsWelcome(fromB64url(entry.welcome));
-    await rememberGroup(entry.conversationId, groupId);
+    // The Welcome's group state already covers its commit.
+    await rememberGroup(entry.conversationId, groupId, entry.commitPosition);
   }
 }
 
@@ -252,22 +285,51 @@ export async function decryptedMessages(
   conversationId: string,
   events: { envelopeId: string; envelopeClass: string; position: string }[],
 ): Promise<Record<string, CachedMessage>> {
-  const groupId = await groupIdFor(conversationId);
+  const record = await groupRecordFor(conversationId);
   const cache = await readMessageCache(conversationId);
-  if (!groupId) return cache;
+  if (!record) return cache;
+  const groupId = fromHex(record.groupId);
   const session = getSession();
-  for (const event of events) {
-    if (event.envelopeClass !== "application") continue;
-    if (cache[event.envelopeId]) continue;
+  const fetchEnvelope = async (
+    envelopeId: string,
+  ): Promise<{
+    envelope: string;
+    sender: { installationId: string | null };
+  } | null> => {
     const response = await api(
       "GET",
-      `/v1/conversations/${conversationId}/envelopes/${event.envelopeId}`,
+      `/v1/conversations/${conversationId}/envelopes/${envelopeId}`,
     );
-    if (!response.ok) continue;
-    const body = (await response.json()) as {
+    if (!response.ok) return null;
+    return (await response.json()) as {
       envelope: string;
       sender: { installationId: string | null };
     };
+  };
+  // Events arrive in position order; commits MUST merge before any
+  // later application message can decrypt.
+  for (const event of events) {
+    if (event.envelopeClass === "mls_commit") {
+      if (BigInt(event.position) <= BigInt(record.processedPosition)) continue;
+      const body = await fetchEnvelope(event.envelopeId);
+      if (!body) return cache;
+      if (body.sender.installationId !== session.installationId) {
+        try {
+          await processMlsCommit(groupId, fromB64url(body.envelope));
+        } catch {
+          // A commit this device cannot merge means every later
+          // ciphertext is unreadable: stop here rather than mis-render.
+          return cache;
+        }
+      }
+      record.processedPosition = event.position;
+      await rememberGroup(conversationId, groupId, event.position);
+      continue;
+    }
+    if (event.envelopeClass !== "application") continue;
+    if (cache[event.envelopeId]) continue;
+    const body = await fetchEnvelope(event.envelopeId);
+    if (!body) continue;
     if (body.sender.installationId === session.installationId) {
       // Own ciphertext without a send-time cache entry (e.g. cleared
       // storage): unrecoverable by design.

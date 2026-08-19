@@ -363,15 +363,35 @@ pub fn add_member<S>(
 where
     S: StorageProvider<CURRENT_VERSION>,
 {
+    add_members(
+        group,
+        provider,
+        identity,
+        core::slice::from_ref(key_package),
+    )
+}
+
+/// Create and locally merge one Add Commit covering every KeyPackage.
+/// A single Welcome message serves all invitees.
+pub fn add_members<S>(
+    group: &mut MlsGroup,
+    provider: &ProfileProvider<S>,
+    identity: &SyntheticIdentity,
+    key_packages: &[KeyPackage],
+) -> Result<(Vec<u8>, Vec<u8>), Error>
+where
+    S: StorageProvider<CURRENT_VERSION>,
+{
+    if key_packages.is_empty() {
+        return Err(Error::UnsupportedCapability);
+    }
     validate_group_profile(group)?;
     ensure_no_pending_proposals(group)?;
-    validate_key_package(key_package)?;
+    for key_package in key_packages {
+        validate_key_package(key_package)?;
+    }
     let (commit, welcome, _) = group
-        .add_members(
-            provider,
-            identity.signer(),
-            core::slice::from_ref(key_package),
-        )
+        .add_members(provider, identity.signer(), key_packages)
         .map_err(|_| Error::CryptoOperationFailed)?;
     let commit_bytes = serialize_output(&commit, WireFormat::PublicMessage)?;
     let welcome_bytes = serialize_output(&welcome, WireFormat::Welcome)?;

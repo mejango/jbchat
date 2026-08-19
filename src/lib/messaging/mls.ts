@@ -77,12 +77,23 @@ export interface MlsAddMemberResult {
   readonly confirmedTranscriptHash: Uint8Array;
 }
 
-export async function addMlsMember(
+/** One Add Commit covering every KeyPackage; one Welcome serves all. */
+export async function addMlsMembers(
   groupId: Uint8Array,
-  keyPackage: Uint8Array,
+  keyPackages: Uint8Array[],
 ): Promise<MlsAddMemberResult> {
   const client = await mlsClient();
-  const output = client.addMember(groupId, keyPackage);
+  let total = 0;
+  for (const keyPackage of keyPackages) total += 4 + keyPackage.length;
+  const list = new Uint8Array(total);
+  const view = new DataView(list.buffer);
+  let offset = 0;
+  for (const keyPackage of keyPackages) {
+    view.setUint32(offset, keyPackage.length);
+    list.set(keyPackage, offset + 4);
+    offset += 4 + keyPackage.length;
+  }
+  const output = client.addMembers(groupId, list);
   return persisted(client, {
     commit: output.commit,
     welcome: output.welcome,
