@@ -19,6 +19,12 @@ import {
   subscribeSession,
 } from "@/lib/messaging/client";
 import { connectWithPara, isParaAvailable } from "@/providers/MessagingProviders";
+import {
+  BrandMark,
+  OAUTH_METHODS,
+  WalletFallbackMark,
+  offerableWallets,
+} from "./brandMarks";
 
 const emptySubscribe = () => () => {};
 
@@ -232,16 +238,35 @@ function ConnectSheet({ onClose }: { onClose: () => void }) {
   const { connectors, connectAsync } = useConnect();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [entry, setEntry] = useState("");
+  const [viewAsOpen, setViewAsOpen] = useState(false);
+  const para = isParaAvailable();
 
   useEffect(() => {
     dialogRef.current?.showModal();
   }, []);
 
-  const offerable = connectors.filter(
-    (connector, index, all) =>
-      connector.id !== "para" &&
-      all.findIndex((candidate) => candidate.name === connector.name) === index,
-  );
+  const startPara = async () => {
+    setBusy("para");
+    setError(null);
+    try {
+      await connectWithPara();
+      dialogRef.current?.close();
+    } catch {
+      setError("Sign-in did not complete.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const squareButton = {
+    width: 40,
+    height: 40,
+    padding: 0,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  } as const;
 
   return (
     <dialog
@@ -252,45 +277,111 @@ function ConnectSheet({ onClose }: { onClose: () => void }) {
         if (event.target === dialogRef.current) dialogRef.current?.close();
       }}
     >
-      <div style={{ padding: "1.25rem" }}>
-        <h2 className="mxDisplay" style={{ margin: 0, fontSize: 18 }}>
-          Sign in
-        </h2>
-        <p className="mxHint" style={{ marginTop: 4 }}>
-          Connect the wallet you support projects with.
-        </p>
+      <div style={{ padding: "1.25rem", minWidth: 340 }}>
         <div
           style={{
             display: "flex",
-            flexDirection: "column",
-            gap: 8,
-            marginTop: 16,
+            justifyContent: "space-between",
+            alignItems: "flex-start",
           }}
         >
-          {isParaAvailable() ? (
-            <button
-              className="mxBtnSecondary"
-              disabled={busy !== null}
-              onClick={async () => {
-                setBusy("para");
-                setError(null);
-                try {
-                  await connectWithPara();
-                  dialogRef.current?.close();
-                } catch {
-                  setError("Para sign-in did not complete.");
-                } finally {
-                  setBusy(null);
-                }
+          <div>
+            <h2 className="mxDisplay" style={{ margin: 0, fontSize: 20 }}>
+              Sign in
+            </h2>
+            <p className="mxHint" style={{ margin: "4px 0 0" }}>
+              {para
+                ? "You will receive a code."
+                : "Connect the wallet you support projects with."}
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => dialogRef.current?.close()}
+            style={{
+              border: "none",
+              background: "none",
+              cursor: "pointer",
+              fontSize: 18,
+              lineHeight: 1,
+              padding: 4,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {para ? (
+          <>
+            <form
+              style={{ marginTop: 16 }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                void startPara();
               }}
             >
-              Email or social (Para)
-            </button>
-          ) : null}
-          {offerable.map((connector) => (
+              <input
+                className="mxInput"
+                type="text"
+                value={entry}
+                onChange={(event) => setEntry(event.target.value)}
+                placeholder="you@email.com | +1 222 333 4444"
+                aria-label="Email address or phone number"
+                autoComplete="email"
+              />
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  marginTop: 10,
+                }}
+              >
+                <button
+                  className="mxBtnPrimary"
+                  type="submit"
+                  disabled={busy !== null}
+                >
+                  Continue
+                </button>
+              </div>
+            </form>
+            <p className="mxHint" style={{ margin: "14px 0 6px", fontSize: 12 }}>
+              Or, use socials
+            </p>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {OAUTH_METHODS.map(({ method, label }) => (
+                <button
+                  key={method}
+                  type="button"
+                  className="mxBtnSecondary"
+                  style={squareButton}
+                  title={label}
+                  aria-label={label}
+                  disabled={busy !== null}
+                  onClick={() => void startPara()}
+                >
+                  <BrandMark method={method} />
+                </button>
+              ))}
+            </div>
+            <p className="mxHint" style={{ margin: "14px 0 6px", fontSize: 12 }}>
+              … or, a wallet.
+            </p>
+          </>
+        ) : (
+          <div style={{ marginTop: 16 }} />
+        )}
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {offerableWallets(connectors).map((connector) => (
             <button
               key={connector.uid}
+              type="button"
               className="mxBtnSecondary"
+              style={squareButton}
+              title={connector.name}
+              aria-label={connector.name}
               disabled={busy !== null}
               onClick={async () => {
                 setBusy(connector.uid);
@@ -305,17 +396,49 @@ function ConnectSheet({ onClose }: { onClose: () => void }) {
                 }
               }}
             >
-              {connector.name}
+              {connector.icon ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={connector.icon}
+                  alt=""
+                  style={{ width: 20, height: 20 }}
+                />
+              ) : (
+                <WalletFallbackMark />
+              )}
             </button>
           ))}
         </div>
+
         {error ? (
           <p className="mxError" style={{ marginTop: 12 }}>
             {error}
           </p>
         ) : null}
-        <div style={{ borderTop: "1px solid var(--mx-smoke-200)", marginTop: 16 }}>
-          <ViewAsForm onApplied={() => dialogRef.current?.close()} />
+
+        <div
+          style={{ borderTop: "1px solid var(--mx-smoke-200)", marginTop: 16 }}
+        >
+          {viewAsOpen ? (
+            <ViewAsForm onApplied={() => dialogRef.current?.close()} />
+          ) : (
+            <button
+              type="button"
+              className="mxHint"
+              style={{
+                border: "none",
+                background: "none",
+                cursor: "pointer",
+                padding: "0.75rem 0 0",
+                textDecoration: "underline",
+                font: "inherit",
+                fontSize: 13,
+              }}
+              onClick={() => setViewAsOpen(true)}
+            >
+              View as…
+            </button>
+          )}
         </div>
       </div>
     </dialog>

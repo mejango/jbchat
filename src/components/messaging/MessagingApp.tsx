@@ -56,21 +56,12 @@ export function MessagingApp() {
       <div className="mxApp">
         <header className="mxHeader">
           <div className="mxRow">
-            <span
-              className="mxAvatar"
-              style={{
-                width: 36,
-                height: 36,
-                background: "var(--mx-bluebs)",
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "white",
-                fontWeight: 600,
-              }}
-            >
-              ✉
-            </span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/juicebox-mark.svg"
+              alt=""
+              style={{ height: 34, width: "auto" }}
+            />
             <div>
               <div className="mxDisplay" style={{ fontSize: 16 }}>
                 Juicebox Messaging
