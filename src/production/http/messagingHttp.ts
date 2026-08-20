@@ -176,6 +176,7 @@ export interface MessagingHttpHandlers {
   readonly policyWitnessSync: (request: Request) => Promise<Response>;
   readonly externalSenderRotation: (request: Request) => Promise<Response>;
   readonly rpcDiagnostics: (request: Request) => Promise<Response>;
+  readonly enrollmentStatus: (request: Request) => Promise<Response>;
   readonly registerPushEndpoint: (
     request: Request,
     installationId: string,
@@ -1435,6 +1436,31 @@ export function createMessagingHttpHandlers(
         wired.policyWitnessSubmit,
       );
       return jsonNoStore(200, report);
+    },
+
+    async enrollmentStatus(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.internalSyncToken) return notFound();
+      const authorization = request.headers.get("authorization");
+      if (authorization !== `Bearer ${wired.internalSyncToken}`) {
+        return problem(401, "unauthorized");
+      }
+      const [installs, creds, accounts, attempts] = await Promise.all([
+        wired.sql`SELECT count(*)::int AS c FROM installations`,
+        wired.sql`SELECT count(*)::int AS c FROM device_credentials WHERE status = 'active'`,
+        wired.sql`SELECT count(*)::int AS c FROM accounts`,
+        wired.sql`SELECT state, count(*)::int AS c FROM device_enrollment_attempts GROUP BY state ORDER BY c DESC`,
+      ]);
+      return jsonNoStore(200, {
+        installations: installs[0].c,
+        activeCredentials: creds[0].c,
+        accounts: accounts[0].c,
+        attemptsByState: attempts.map((row) => ({
+          state: String(row.state),
+          count: row.c,
+        })),
+      });
     },
 
     async rpcDiagnostics(request: Request): Promise<Response> {
