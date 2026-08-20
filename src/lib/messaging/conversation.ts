@@ -162,6 +162,30 @@ export async function startConversation(claimHandle: string): Promise<string> {
   const planned = await api("POST", "/v1/conversation-plans", {
     eligibilityClaimHandle: claimHandle,
   });
+  return activatePlannedConversation(planned);
+}
+
+/**
+ * Owner-side accept: the accepting owner is the MLS group creator and the
+ * waiting customer is the welcome target. Same activation as a customer
+ * start — only the plan source differs (the queued request, not a fresh
+ * claim). Returns the conversation id.
+ */
+export async function acceptConversationRequest(
+  requestId: string,
+): Promise<string> {
+  const planned = await api("POST", "/v1/conversation-requests/accept", {
+    requestId,
+  });
+  return activatePlannedConversation(planned);
+}
+
+// Build the MLS group on this device from a returned plan and activate it
+// with the real Commit + Welcome. Roster-shape agnostic: whoever this
+// device is appears as the creator, and every 'welcome' member is added.
+async function activatePlannedConversation(
+  planned: Response,
+): Promise<string> {
   if (planned.status === 200) {
     const body = (await planned.json()) as { conversationId: string };
     return body.conversationId;
@@ -188,7 +212,7 @@ export async function startConversation(claimHandle: string): Promise<string> {
 
   const groupId = crypto.getRandomValues(new Uint8Array(32));
   await createMlsGroup(groupId);
-  // One Add Commit covers every staff installation; the single Welcome
+  // One Add Commit covers every welcome target; the single Welcome
   // serves them all.
   const added = await addMlsMembers(
     groupId,

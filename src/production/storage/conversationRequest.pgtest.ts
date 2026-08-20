@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { createKeyedIdentityCrypto } from "../identity/identityKeyedCrypto";
 import { createConversationRequestStore } from "./conversationRequestStore";
+import { createConversationPlanStore } from "./conversationPlanStore";
 import { ensureProjectRef } from "./projectRefProvision";
 
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
@@ -32,6 +33,16 @@ describeStorage("conversation requests", () => {
       sql,
       hmacEligibilityClaimHandle: crypto.hmacEligibilityClaimHandle,
       now: () => NOW,
+    });
+  // The plan store reads the real DB clock (not the injected NOW), so the
+  // fixture grant's valid_until is far-future to stay live for acceptRequest.
+  const planStore = () =>
+    createConversationPlanStore({
+      sql,
+      provisioningSeed: Buffer.alloc(32, 0x7d),
+      logSigner: { signCheckpointDigest: async () => "" },
+      logSigningKeyId: "req-lab-log-signer",
+      hmacEligibilityClaimHandle: crypto.hmacEligibilityClaimHandle,
     });
 
   const seedInstallation = (
@@ -113,7 +124,7 @@ describeStorage("conversation requests", () => {
           ${crypto.hmacEligibilityClaimHandle(CLAIM_HANDLE)},
           ${FINALITY_PROFILE_ID}, 1, ${PROFILE_HASH}, ${randomBytes(32)},
           'eip155:31337', 100, ${randomBytes(32)}, 'verified-finalized',
-          'active', ${NOW}::timestamptz, ${NOW}::timestamptz + interval '1 day'
+          'active', ${NOW}::timestamptz, '2099-01-01T00:00:00.000Z'
         )`;
       await tx`
         INSERT INTO project_staff_registrations (
@@ -193,5 +204,69 @@ describeStorage("conversation requests", () => {
     const policies = await sql`
       SELECT count(*)::int AS c FROM policies WHERE project_ref_id = ${first}`;
     expect(policies[0].c).toBe(1);
+  });
+
+  // acceptRequest inverts the roster: the owner becomes MLS creator and the
+  // waiting customer the welcome target. These cover its owner-auth gates and
+  // that it proceeds to reserve the CUSTOMER's KeyPackage.
+  it("refuses acceptRequest from an installation that is not project staff", async () => {
+    const request = await store().createRequest({
+      requesterAccountId: CUSTOMER_ACCOUNT_ID,
+      requesterInstallationId: CUSTOMER_INSTALLATION_ID,
+      eligibilityClaimHandle: CLAIM_HANDLE,
+    });
+    if (request.status === "refused") throw new Error(request.reasonCode);
+    const result = await planStore().acceptRequest({
+      requestId: request.requestId,
+      // The customer is not staff on this project.
+      ownerAccountId: CUSTOMER_ACCOUNT_ID,
+      ownerInstallationId: CUSTOMER_INSTALLATION_ID,
+    });
+    expect(result).toMatchObject({
+      status: "refused",
+      reasonCode: "not_project_staff",
+    });
+  });
+
+  it("refuses acceptRequest for an unknown request", async () => {
+    const result = await planStore().acceptRequest({
+      requestId: randomUUID(),
+      ownerAccountId: OWNER_ACCOUNT_ID,
+      ownerInstallationId: OWNER_INSTALLATION_ID,
+    });
+    expect(result).toMatchObject({
+      status: "refused",
+      reasonCode: "request_not_pending",
+    });
+  });
+
+  it("owner-accepts through the auth gates to the customer's KeyPackage take", async () => {
+    const request = await store().createRequest({
+      requesterAccountId: CUSTOMER_ACCOUNT_ID,
+      requesterInstallationId: CUSTOMER_INSTALLATION_ID,
+      eligibilityClaimHandle: CLAIM_HANDLE,
+    });
+    if (request.status === "refused") throw new Error(request.reasonCode);
+    // The owner IS active staff and the grant is live, so acceptRequest
+    // clears every gate and reaches the welcome-target KeyPackage take —
+    // which is the CUSTOMER's. None is stocked, so it stops there.
+    const result = await planStore().acceptRequest({
+      requestId: request.requestId,
+      ownerAccountId: OWNER_ACCOUNT_ID,
+      ownerInstallationId: OWNER_INSTALLATION_ID,
+    });
+    expect(result).toMatchObject({
+      status: "refused",
+      reasonCode: "recipient_keys_unavailable",
+    });
+    // Nothing materialized and the request stays pending (safe to retry).
+    const plans = await sql`
+      SELECT count(*)::int AS c FROM conversation_plans
+      WHERE project_ref_id = ${PROJECT_REF_ID}`;
+    expect(plans[0].c).toBe(0);
+    const stillPending = await sql`
+      SELECT status FROM conversation_requests
+      WHERE request_id = ${request.requestId}`;
+    expect(String(stillPending[0].status)).toBe("pending");
   });
 });

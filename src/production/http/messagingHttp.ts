@@ -153,6 +153,7 @@ export interface MessagingHttpHandlers {
   readonly createConversationPlan: (request: Request) => Promise<Response>;
   readonly createConversationRequest: (request: Request) => Promise<Response>;
   readonly listConversationRequests: (request: Request) => Promise<Response>;
+  readonly acceptConversationRequest: (request: Request) => Promise<Response>;
   readonly activateConversation: (request: Request) => Promise<Response>;
   readonly listConversations: (request: Request) => Promise<Response>;
   readonly registerProjectStaff: (
@@ -981,6 +982,40 @@ export function createMessagingHttpHandlers(
         session.installationId,
       );
       return jsonNoStore(200, { requests: items });
+    },
+
+    async acceptConversationRequest(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.plans) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const requestId = (body as Record<string, unknown>).requestId;
+      if (typeof requestId !== "string") return problem(400, "malformed_request");
+      const accepted = await wired.plans.acceptRequest({
+        requestId,
+        ownerAccountId: session.accountId,
+        ownerInstallationId: session.installationId,
+      });
+      if (accepted.status === "created") return jsonNoStore(201, accepted.plan);
+      if (accepted.status === "reuse_generation") {
+        return jsonNoStore(200, {
+          action: "reuse_generation",
+          conversationId: accepted.conversationId,
+        });
+      }
+      return problem(
+        accepted.reasonCode === "recipient_keys_unavailable"
+          ? 409
+          : accepted.reasonCode === "not_project_staff"
+            ? 403
+            : accepted.reasonCode === "request_not_pending"
+              ? 404
+              : 403,
+        accepted.reasonCode,
+      );
     },
 
     async createConversationPlan(request: Request): Promise<Response> {

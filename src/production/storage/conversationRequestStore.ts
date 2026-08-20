@@ -150,6 +150,13 @@ export function createConversationRequestStore(
         JOIN project_refs p ON p.project_ref_id = r.project_ref_id
         WHERE s.installation_id = ${installationId}
           AND s.state = 'active'
+          AND NOT EXISTS (
+            SELECT 1 FROM relationships rel
+            WHERE rel.project_ref_id = r.project_ref_id
+              AND rel.customer_account_id = r.requester_account_id
+              AND rel.state = 'active'
+              AND rel.active_conversation_id IS NOT NULL
+          )
         ORDER BY r.created_at DESC
         LIMIT 200`;
       return rows.map((row) => ({

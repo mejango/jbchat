@@ -10,6 +10,7 @@ import {
   type EnrollmentProgress,
 } from "@/lib/messaging/client";
 import {
+  acceptConversationRequest,
   canDecrypt,
   decryptedMessages,
   sendMessage,
@@ -247,7 +248,7 @@ function Inbox() {
 
       <Discovery onStart={() => setClaimOpen(true)} />
 
-      <RequestsQueue />
+      <RequestsQueue onAccepted={reload} />
 
       {conversations === null ? (
         <p className="mxHint">Loading your inbox…</p>
@@ -369,8 +370,9 @@ const CHAIN_LABEL: Record<string, string> = {
   "eip155:42161": "Arbitrum",
 };
 
-function RequestsQueue() {
+function RequestsQueue({ onAccepted }: { onAccepted: () => void }) {
   const [requests, setRequests] = useState<OwnerRequest[] | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -388,7 +390,7 @@ function RequestsQueue() {
       clearTimeout(kickoff);
       clearInterval(interval);
     };
-  }, []);
+  }, [reloadKey]);
 
   if (!requests || requests.length === 0) return null;
 
@@ -398,23 +400,62 @@ function RequestsQueue() {
         Requests to attend — customers waiting to reach you
       </h2>
       {requests.map((request) => (
-        <div
+        <RequestRow
           key={request.requestId}
-          className="mxCard mxRow"
-          style={{ padding: "0.9rem 1rem" }}
-        >
-          <Avatar address={request.requesterAccountId} size={40} />
-          <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 500 }}>
-              Project #{request.projectId} ·{" "}
-              {CHAIN_LABEL[request.chainId] ?? request.chainId}
-            </div>
-            <div className="mxHint">A paid customer wants to start a chat.</div>
-          </div>
-          <span className="mxChip">Waiting</span>
-        </div>
+          request={request}
+          onAccepted={() => {
+            setReloadKey((key) => key + 1);
+            onAccepted();
+          }}
+        />
       ))}
     </section>
+  );
+}
+
+function RequestRow({
+  request,
+  onAccepted,
+}: {
+  request: OwnerRequest;
+  onAccepted: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "working" | "error">("idle");
+
+  const accept = async () => {
+    setState("working");
+    try {
+      // Owner-side: build the MLS group on this device and welcome the
+      // waiting customer, using their published KeyPackage.
+      await acceptConversationRequest(request.requestId);
+      onAccepted();
+    } catch {
+      setState("error");
+    }
+  };
+
+  return (
+    <div className="mxCard mxRow" style={{ padding: "0.9rem 1rem" }}>
+      <Avatar address={request.requesterAccountId} size={40} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 500 }}>
+          Project #{request.projectId} ·{" "}
+          {CHAIN_LABEL[request.chainId] ?? request.chainId}
+        </div>
+        <div className="mxHint">A paid customer wants to start a chat.</div>
+      </div>
+      <button
+        className="mxBtnPrimary"
+        disabled={state === "working"}
+        onClick={() => void accept()}
+      >
+        {state === "working"
+          ? "Opening…"
+          : state === "error"
+            ? "Try again"
+            : "Accept"}
+      </button>
+    </div>
   );
 }
 

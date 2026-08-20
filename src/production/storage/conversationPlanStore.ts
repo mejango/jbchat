@@ -89,6 +89,18 @@ export interface ConversationPlanStore {
     readonly creatorInstallationId: string;
     readonly eligibilityClaimHandle: string;
   }) => Promise<PlanCreation>;
+  /**
+   * Owner-initiated plan for a queued request: the accepting owner (an
+   * active staff installation on the request's project) becomes the MLS
+   * group creator and the waiting customer is the welcome target. The
+   * returned plan is activated by the OWNER's client, inverting the
+   * customer-creates roster; activate() is unchanged.
+   */
+  readonly acceptRequest: (input: {
+    readonly requestId: string;
+    readonly ownerAccountId: string;
+    readonly ownerInstallationId: string;
+  }) => Promise<PlanCreation>;
   readonly activate: (input: unknown, callerInstallationId: string) => Promise<ActivationResult>;
 }
 
@@ -311,6 +323,246 @@ export function createConversationPlanStore(
     });
   };
 
+  // The role-agnostic plan body shared by the customer-initiated
+  // createPlan (creator = customer, welcome = staff) and the
+  // owner-initiated acceptRequest (creator = owner, welcome = customer).
+  // The caller resolves who fills each slot and reserves the welcome
+  // members' KeyPackages; this materializes the roster, plan row, and
+  // members exactly the same way for both — activate() then drives the
+  // rest purely from the plan record, so nothing downstream hardcodes a
+  // role.
+  const materializePlan = async (
+    tx: TransactionSql,
+    now: string,
+    params: {
+      readonly projectRefId: string;
+      readonly customerAccountId: string;
+      readonly creator: {
+        readonly accountId: string;
+        readonly installationId: string;
+        readonly role: string;
+        readonly credentialFingerprint: string;
+      };
+      readonly welcomeMembers: readonly {
+        readonly accountId: string;
+        readonly installationId: string;
+        readonly role: string;
+        readonly credentialFingerprint: string;
+        readonly keyPackageRef: string;
+        readonly keyPackage: string;
+      }[];
+      readonly existingRelationship: {
+        readonly relationshipId: string;
+        readonly relationshipScopeId: string;
+      } | null;
+    },
+  ): Promise<PlanCreation> => {
+    const { projectRefId, customerAccountId, creator, welcomeMembers } = params;
+    const scope = await provisionServiceScope(tx, now);
+    const provision = await provisionProject(tx, projectRefId, now);
+    const planId = randomUUID();
+    const relationshipId =
+      params.existingRelationship?.relationshipId ?? randomUUID();
+    const relationshipScopeId =
+      params.existingRelationship?.relationshipScopeId ?? randomUUID();
+    const retentionPolicy = { profile: "reader-history-retained.v1" };
+    const retentionHash = createHash("sha256")
+      .update("jb-msg-retention/v1", "utf8")
+      .update(JSON.stringify(retentionPolicy), "utf8")
+      .digest();
+    if (!params.existingRelationship) {
+      await tx`
+        INSERT INTO relationships (
+          relationship_id, relationship_scope_id, project_ref_id,
+          customer_account_id, policy_profile_id,
+          reader_history_retention_policy,
+          reader_history_retention_policy_hash, state, created_at
+        ) VALUES (
+          ${relationshipId}, ${relationshipScopeId}, ${projectRefId},
+          ${customerAccountId}, 'project-support-standard-v1',
+          ${JSON.stringify(retentionPolicy)}::jsonb, ${retentionHash},
+          'active', ${now}::timestamptz
+        )`;
+    }
+
+    const conversationId = randomUUID();
+    const roster = [
+      {
+        accountId: creator.accountId,
+        installationId: creator.installationId,
+        installationKind: "native",
+        role: creator.role,
+        bootstrapMode: "creator",
+        credentialFingerprint: creator.credentialFingerprint,
+      },
+      ...welcomeMembers.map((member) => ({
+        accountId: member.accountId,
+        installationId: member.installationId,
+        installationKind: "native",
+        role: member.role,
+        bootstrapMode: "welcome",
+        credentialFingerprint: member.credentialFingerprint,
+        keyPackageRef: member.keyPackageRef,
+        keyPackage: member.keyPackage,
+      })),
+    ];
+    const rosterHash = createHash("sha256")
+      .update("jb-msg-plan-roster/v1", "utf8")
+      .update(JSON.stringify(roster), "utf8")
+      .digest();
+    const senderGenerations = await tx`
+      SELECT external_sender_credential_id, signer_generation
+      FROM external_sender_credentials
+      WHERE external_sender_credential_id IN (
+        ${String(provision.current_external_sender_credential_id)},
+        ${String(provision.staged_external_sender_credential_id)}
+      )`;
+    const generationOf = (credentialId: string): string => {
+      const row = senderGenerations.find(
+        (candidate) =>
+          String(candidate.external_sender_credential_id) === credentialId,
+      );
+      return row ? String(row.signer_generation) : "1";
+    };
+    const externalSenders = {
+      current: {
+        credentialId: String(provision.current_external_sender_credential_id),
+        signerGeneration: generationOf(
+          String(provision.current_external_sender_credential_id),
+        ),
+      },
+      stagedNext: {
+        credentialId: String(provision.staged_external_sender_credential_id),
+        signerGeneration: generationOf(
+          String(provision.staged_external_sender_credential_id),
+        ),
+      },
+    };
+    const externalSendersHash = createHash("sha256")
+      .update("jb-msg-plan-external-senders/v1", "utf8")
+      .update(JSON.stringify(externalSenders), "utf8")
+      .digest();
+
+    const quotaBindings = quotaBindingsFor(
+      conversationId,
+      creator.accountId,
+      creator.installationId,
+      projectRefId,
+      now,
+    );
+    const quotaPolicyDigest = computeApplicationAppendQuotaPolicyDigest(
+      quotaBindings.map(({ subjectId, ...identity }) => {
+        void subjectId;
+        return identity;
+      }) as never,
+    );
+    const expiresAt = new Date(
+      Date.parse(now) + PLAN_TTL_MILLISECONDS,
+    ).toISOString();
+    await tx`
+      INSERT INTO conversation_plans (
+        plan_id, conversation_id, relationship_id, relationship_scope_id,
+        project_ref_id, creator_account_id, creator_installation_id,
+        kind, delivery_purpose, generation, release_profile_id,
+        delivery_limits_digest, release_trust_root_digest,
+        quota_policy_digest, roster_canonical, roster_hash,
+        external_senders_canonical, external_senders_hash,
+        reader_history_retention_policy_hash, plan_version, created_at,
+        expires_at
+      ) VALUES (
+        ${planId}, ${conversationId}, ${relationshipId},
+        ${relationshipScopeId}, ${projectRefId},
+        ${creator.accountId}, ${creator.installationId},
+        'relationship', 'purchase_support', 1, ${RELEASE_PROFILE_ID},
+        ${Buffer.from(scope.limitsDigest, "base64url")},
+        ${Buffer.from(scope.trustRootDigest, "base64url")},
+        ${Buffer.from(quotaPolicyDigest, "base64url")},
+        ${JSON.stringify(roster)}::jsonb, ${rosterHash},
+        ${JSON.stringify(externalSenders)}::jsonb, ${externalSendersHash},
+        ${retentionHash}, 1, ${now}::timestamptz, ${expiresAt}::timestamptz
+      )`;
+    for (const member of roster) {
+      if (member.bootstrapMode === "welcome") {
+        await tx`
+          UPDATE key_packages SET
+            state = 'taken', taken_at = ${now}::timestamptz,
+            taken_by_plan_id = ${planId}
+          WHERE key_package_ref = ${Buffer.from(
+            (member as { keyPackageRef: string }).keyPackageRef,
+            "base64url",
+          )} AND state = 'available'`;
+      }
+      await tx`
+        INSERT INTO conversation_plan_members (
+          plan_id, installation_id, account_id, role, bootstrap_mode,
+          mls_credential_fingerprint, key_package_ref
+        ) VALUES (
+          ${planId}, ${member.installationId}, ${member.accountId},
+          ${member.role}, ${member.bootstrapMode},
+          ${Buffer.from(member.credentialFingerprint, "base64url")},
+          ${
+            member.bootstrapMode === "creator"
+              ? null
+              : Buffer.from(
+                  (member as { keyPackageRef: string }).keyPackageRef,
+                  "base64url",
+                )
+          }
+        )`;
+    }
+
+    return Object.freeze({
+      status: "created" as const,
+      plan: {
+        planId,
+        action: "create_generation",
+        relationshipId,
+        relationshipScopeId,
+        conversationId,
+        kind: "relationship",
+        deliveryPurpose: "purchase-support",
+        releaseProfileId: RELEASE_PROFILE_ID,
+        deliveryLimitsDigest: scope.limitsDigest,
+        releaseTrustRootDigest: scope.trustRootDigest,
+        expiresAt,
+        planEtag: `"plan-${planId}-1"`,
+        roster,
+        rosterHash: rosterHash.toString("base64url"),
+        externalSenders,
+        externalSendersHash: externalSendersHash.toString("base64url"),
+      },
+    });
+  };
+
+  // Reserve one available KeyPackage per installation (the irreversible
+  // take is committed later in materializePlan). Returns null if any
+  // installation has none.
+  const reserveKeyPackages = async (
+    tx: TransactionSql,
+    now: string,
+    installationIds: readonly string[],
+  ): Promise<Map<string, { ref: string; bytes: string }> | null> => {
+    const out = new Map<string, { ref: string; bytes: string }>();
+    for (const installationId of installationIds) {
+      const taken = await tx`
+        SELECT encode(key_package_ref, 'base64') AS ref,
+               encode(package_bytes, 'base64') AS bytes
+        FROM key_packages
+        WHERE installation_id = ${installationId}
+          AND state = 'available' AND taken_at IS NULL
+          AND expires_at > ${now}::timestamptz
+        ORDER BY created_at
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED`;
+      if (taken.length !== 1) return null;
+      out.set(installationId, {
+        ref: b64ToUrl(taken[0].ref),
+        bytes: b64ToUrl(taken[0].bytes),
+      });
+    }
+    return out;
+  };
+
   return Object.freeze({
     async createPlan(input: {
       readonly creatorAccountId: string;
@@ -398,223 +650,183 @@ export function createConversationPlanStore(
           });
         }
 
-        const scope = await provisionServiceScope(tx, now);
-        const provision = await provisionProject(tx, projectRefId, now);
+        const reserved = await reserveKeyPackages(
+          tx,
+          now,
+          staff.map((member) => String(member.installation_id)),
+        );
+        if (!reserved) {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "recipient_keys_unavailable",
+          });
+        }
+        return materializePlan(tx, now, {
+          projectRefId,
+          customerAccountId: input.creatorAccountId,
+          creator: {
+            accountId: input.creatorAccountId,
+            installationId: input.creatorInstallationId,
+            role: "customer",
+            credentialFingerprint: b64ToUrl(creator[0].fingerprint),
+          },
+          welcomeMembers: staff.map((member) => ({
+            accountId: String(member.account_id),
+            installationId: String(member.installation_id),
+            role: "project-staff",
+            credentialFingerprint: b64ToUrl(String(member.fingerprint)),
+            keyPackageRef: reserved.get(String(member.installation_id))!.ref,
+            keyPackage: reserved.get(String(member.installation_id))!.bytes,
+          })),
+          existingRelationship:
+            relationships.length === 1
+              ? {
+                  relationshipId: String(relationships[0].relationship_id),
+                  relationshipScopeId: String(
+                    relationships[0].relationship_scope_id,
+                  ),
+                }
+              : null,
+        });
+      });
+    },
 
-        // The irreversible KeyPackage take, one per staff installation.
-        const takenByInstallation = new Map<
-          string,
-          { ref: string; sha: string; bytes: string }
-        >();
-        const planId = randomUUID();
-        for (const member of staff) {
-          const taken = await tx`
-            SELECT encode(key_package_ref, 'base64') AS ref,
-                   encode(package_sha256, 'base64') AS sha,
-                   encode(package_bytes, 'base64') AS bytes
-            FROM key_packages
-            WHERE installation_id = ${String(member.installation_id)}
-              AND state = 'available' AND taken_at IS NULL
-              AND expires_at > ${now}::timestamptz
-            ORDER BY created_at
-            LIMIT 1
-            FOR UPDATE SKIP LOCKED`;
-          if (taken.length !== 1) {
-            return Object.freeze({
-              status: "refused" as const,
-              reasonCode: "recipient_keys_unavailable",
-            });
-          }
-          takenByInstallation.set(String(member.installation_id), {
-            ref: b64ToUrl(taken[0].ref),
-            sha: b64ToUrl(taken[0].sha),
-            bytes: b64ToUrl(taken[0].bytes),
+    async acceptRequest(input: {
+      readonly requestId: string;
+      readonly ownerAccountId: string;
+      readonly ownerInstallationId: string;
+    }): Promise<PlanCreation> {
+      if (
+        !UUID_PATTERN.test(input.requestId) ||
+        !UUID_PATTERN.test(input.ownerAccountId) ||
+        !UUID_PATTERN.test(input.ownerInstallationId)
+      ) {
+        return Object.freeze({ status: "refused", reasonCode: "malformed_request" });
+      }
+      return sql.begin(async (tx) => {
+        const now = await dbNow(tx);
+        const requests = await tx`
+          SELECT request_id, project_ref_id, requester_account_id,
+                 requester_installation_id, eligibility_grant_id, status
+          FROM conversation_requests
+          WHERE request_id = ${input.requestId}
+          FOR UPDATE`;
+        if (requests.length !== 1 || String(requests[0].status) !== "pending") {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "request_not_pending",
+          });
+        }
+        const projectRefId = String(requests[0].project_ref_id);
+        const customerAccountId = String(requests[0].requester_account_id);
+        const customerInstallationId = String(
+          requests[0].requester_installation_id,
+        );
+
+        // The accepting installation must be active staff on this project.
+        const owner = await tx`
+          SELECT i.installation_id,
+                 encode(i.mls_credential_fingerprint, 'base64') AS fingerprint
+          FROM project_staff_registrations r
+          JOIN installations i ON i.installation_id = r.installation_id
+          WHERE r.project_ref_id = ${projectRefId}
+            AND r.installation_id = ${input.ownerInstallationId}
+            AND r.account_id = ${input.ownerAccountId}
+            AND r.state = 'active' AND i.status = 'active'`;
+        if (owner.length !== 1) {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "not_project_staff",
           });
         }
 
-        const relationshipId =
-          relationships.length === 1
-            ? String(relationships[0].relationship_id)
-            : randomUUID();
-        const relationshipScopeId =
-          relationships.length === 1
-            ? String(relationships[0].relationship_scope_id)
-            : randomUUID();
-        const retentionPolicy = { profile: "reader-history-retained.v1" };
-        const retentionHash = createHash("sha256")
-          .update("jb-msg-retention/v1", "utf8")
-          .update(JSON.stringify(retentionPolicy), "utf8")
-          .digest();
-        if (relationships.length === 0) {
-          await tx`
-            INSERT INTO relationships (
-              relationship_id, relationship_scope_id, project_ref_id,
-              customer_account_id, policy_profile_id,
-              reader_history_retention_policy,
-              reader_history_retention_policy_hash, state, created_at
-            ) VALUES (
-              ${relationshipId}, ${relationshipScopeId}, ${projectRefId},
-              ${input.creatorAccountId}, 'project-support-standard-v1',
-              ${JSON.stringify(retentionPolicy)}::jsonb, ${retentionHash},
-              'active', ${now}::timestamptz
-            )`;
+        // Revalidate the customer's grant is still live (it may have
+        // expired or been revoked since the request was lodged).
+        const grants = await tx`
+          SELECT state, valid_until, capability
+          FROM eligibility_grants
+          WHERE grant_id = ${String(requests[0].eligibility_grant_id)}`;
+        if (
+          grants.length !== 1 ||
+          String(grants[0].state) !== "active" ||
+          new Date(grants[0].valid_until as Date).toISOString() <= now ||
+          !["purchase-support", "item-set-buyer"].includes(
+            String(grants[0].capability),
+          )
+        ) {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "grant_invalid",
+          });
         }
 
-        const conversationId = randomUUID();
-        const roster = [
-          {
-            accountId: input.creatorAccountId,
-            installationId: input.creatorInstallationId,
-            installationKind: "native",
-            role: "customer",
-            bootstrapMode: "creator",
-            credentialFingerprint: b64ToUrl(creator[0].fingerprint),
-          },
-          ...staff.map((member) => ({
-            accountId: String(member.account_id),
-            installationId: String(member.installation_id),
-            installationKind: "native",
-            role: "project-staff",
-            bootstrapMode: "welcome",
-            credentialFingerprint: b64ToUrl(String(member.fingerprint)),
-            keyPackageRef: takenByInstallation.get(
-              String(member.installation_id),
-            )!.ref,
-            keyPackage: takenByInstallation.get(String(member.installation_id))!
-              .bytes,
-          })),
-        ];
-        const rosterHash = createHash("sha256")
-          .update("jb-msg-plan-roster/v1", "utf8")
-          .update(JSON.stringify(roster), "utf8")
-          .digest();
-        // Generations are read from the credential rows: the rotation
-        // pass advances them past the provisioned 1/2 pair.
-        const senderGenerations = await tx`
-          SELECT external_sender_credential_id, signer_generation
-          FROM external_sender_credentials
-          WHERE external_sender_credential_id IN (
-            ${String(provision.current_external_sender_credential_id)},
-            ${String(provision.staged_external_sender_credential_id)}
-          )`;
-        const generationOf = (credentialId: string): string => {
-          const row = senderGenerations.find(
-            (candidate) =>
-              String(candidate.external_sender_credential_id) === credentialId,
-          );
-          return row ? String(row.signer_generation) : "1";
-        };
-        const externalSenders = {
-          current: {
-            credentialId: String(
-              provision.current_external_sender_credential_id,
-            ),
-            signerGeneration: generationOf(
-              String(provision.current_external_sender_credential_id),
-            ),
-          },
-          stagedNext: {
-            credentialId: String(provision.staged_external_sender_credential_id),
-            signerGeneration: generationOf(
-              String(provision.staged_external_sender_credential_id),
-            ),
-          },
-        };
-        const externalSendersHash = createHash("sha256")
-          .update("jb-msg-plan-external-senders/v1", "utf8")
-          .update(JSON.stringify(externalSenders), "utf8")
-          .digest();
+        const customer = await tx`
+          SELECT encode(mls_credential_fingerprint, 'base64') AS fingerprint
+          FROM installations
+          WHERE installation_id = ${customerInstallationId}
+            AND account_id = ${customerAccountId} AND status = 'active'`;
+        if (customer.length !== 1) {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "requester_not_active",
+          });
+        }
 
-        const quotaBindings = quotaBindingsFor(
-          conversationId,
-          input.creatorAccountId,
-          input.creatorInstallationId,
+        const relationships = await tx`
+          SELECT relationship_id, relationship_scope_id,
+                 active_conversation_id
+          FROM relationships
+          WHERE project_ref_id = ${projectRefId}
+            AND customer_account_id = ${customerAccountId}
+            AND state = 'active'
+          FOR UPDATE`;
+        if (
+          relationships.length === 1 &&
+          relationships[0].active_conversation_id !== null
+        ) {
+          return Object.freeze({
+            status: "reuse_generation" as const,
+            conversationId: String(relationships[0].active_conversation_id),
+          });
+        }
+
+        const reserved = await reserveKeyPackages(tx, now, [
+          customerInstallationId,
+        ]);
+        if (!reserved) {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "recipient_keys_unavailable",
+          });
+        }
+        return materializePlan(tx, now, {
           projectRefId,
-          now,
-        );
-        const quotaPolicyDigest = computeApplicationAppendQuotaPolicyDigest(
-          quotaBindings.map(({ subjectId, ...identity }) => {
-            void subjectId;
-            return identity;
-          }) as never,
-        );
-        const expiresAt = new Date(
-          Date.parse(now) + PLAN_TTL_MILLISECONDS,
-        ).toISOString();
-        await tx`
-          INSERT INTO conversation_plans (
-            plan_id, conversation_id, relationship_id, relationship_scope_id,
-            project_ref_id, creator_account_id, creator_installation_id,
-            kind, delivery_purpose, generation, release_profile_id,
-            delivery_limits_digest, release_trust_root_digest,
-            quota_policy_digest, roster_canonical, roster_hash,
-            external_senders_canonical, external_senders_hash,
-            reader_history_retention_policy_hash, plan_version, created_at,
-            expires_at
-          ) VALUES (
-            ${planId}, ${conversationId}, ${relationshipId},
-            ${relationshipScopeId}, ${projectRefId},
-            ${input.creatorAccountId}, ${input.creatorInstallationId},
-            'relationship', 'purchase_support', 1, ${RELEASE_PROFILE_ID},
-            ${Buffer.from(scope.limitsDigest, "base64url")},
-            ${Buffer.from(scope.trustRootDigest, "base64url")},
-            ${Buffer.from(quotaPolicyDigest, "base64url")},
-            ${JSON.stringify(roster)}::jsonb, ${rosterHash},
-            ${JSON.stringify(externalSenders)}::jsonb, ${externalSendersHash},
-            ${retentionHash}, 1, ${now}::timestamptz, ${expiresAt}::timestamptz
-          )`;
-        for (const member of roster) {
-          // The member row's composite FK points at (key_package_ref,
-          // taken_by_plan_id), so the take is recorded first.
-          if (member.bootstrapMode === "welcome") {
-            await tx`
-              UPDATE key_packages SET
-                state = 'taken', taken_at = ${now}::timestamptz,
-                taken_by_plan_id = ${planId}
-              WHERE key_package_ref = ${Buffer.from(
-                (member as { keyPackageRef: string }).keyPackageRef,
-                "base64url",
-              )} AND state = 'available'`;
-          }
-          await tx`
-            INSERT INTO conversation_plan_members (
-              plan_id, installation_id, account_id, role, bootstrap_mode,
-              mls_credential_fingerprint, key_package_ref
-            ) VALUES (
-              ${planId}, ${member.installationId}, ${member.accountId},
-              ${member.role}, ${member.bootstrapMode},
-              ${Buffer.from(member.credentialFingerprint, "base64url")},
-              ${
-                member.bootstrapMode === "creator"
-                  ? null
-                  : Buffer.from(
-                      (member as { keyPackageRef: string }).keyPackageRef,
-                      "base64url",
-                    )
-              }
-            )`;
-        }
-
-        return Object.freeze({
-          status: "created" as const,
-          plan: {
-            planId,
-            action: "create_generation",
-            relationshipId,
-            relationshipScopeId,
-            conversationId,
-            kind: "relationship",
-            deliveryPurpose: "purchase-support",
-            releaseProfileId: RELEASE_PROFILE_ID,
-            deliveryLimitsDigest: scope.limitsDigest,
-            releaseTrustRootDigest: scope.trustRootDigest,
-            expiresAt,
-            planEtag: `"plan-${planId}-1"`,
-            roster,
-            rosterHash: rosterHash.toString("base64url"),
-            externalSenders,
-            externalSendersHash: externalSendersHash.toString("base64url"),
+          customerAccountId,
+          creator: {
+            accountId: input.ownerAccountId,
+            installationId: input.ownerInstallationId,
+            role: "project-staff",
+            credentialFingerprint: b64ToUrl(owner[0].fingerprint),
           },
+          welcomeMembers: [
+            {
+              accountId: customerAccountId,
+              installationId: customerInstallationId,
+              role: "customer",
+              credentialFingerprint: b64ToUrl(customer[0].fingerprint),
+              keyPackageRef: reserved.get(customerInstallationId)!.ref,
+              keyPackage: reserved.get(customerInstallationId)!.bytes,
+            },
+          ],
+          existingRelationship:
+            relationships.length === 1
+              ? {
+                  relationshipId: String(relationships[0].relationship_id),
+                  relationshipScopeId: String(
+                    relationships[0].relationship_scope_id,
+                  ),
+                }
+              : null,
         });
       });
     },
