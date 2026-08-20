@@ -244,16 +244,19 @@ function Inbox() {
         </div>
       </div>
       {error ? <p className="mxError">{error}</p> : null}
+
+      <Discovery onStart={() => setClaimOpen(true)} />
+
       {conversations === null ? (
         <p className="mxHint">Loading your inbox…</p>
       ) : conversations.length === 0 ? (
-        <section className="mxCard" style={{ padding: "2rem" }}>
+        <section className="mxCard" style={{ padding: "1.5rem" }}>
           <h2 className="mxDisplay" style={{ marginTop: 0, fontSize: 17 }}>
-            No conversations yet
+            No open chats yet
           </h2>
           <p style={{ color: "var(--mx-smoke-700)" }}>
-            Claim a purchase receipt to open a private, end-to-end encrypted
-            support channel with that project&apos;s team.
+            Start one from a project you&apos;ve paid or own above, or claim a
+            purchase receipt directly.
           </p>
         </section>
       ) : (
@@ -346,6 +349,141 @@ function PushToggle() {
     >
       {state === "on" ? "Notifications on" : "Notify me"}
     </button>
+  );
+}
+
+interface DiscoveredProject {
+  chainId: number;
+  projectId: number;
+  name: string | null;
+  logoUri: string | null;
+  isRevnet: boolean;
+}
+interface CustomerProject extends DiscoveredProject {
+  volume: string;
+  paymentsCount: number;
+}
+interface OwnerProject extends DiscoveredProject {
+  payerCount: number;
+}
+
+const CHAIN_NAME: Record<number, string> = {
+  1: "Ethereum",
+  10: "Optimism",
+  8453: "Base",
+  42161: "Arbitrum",
+};
+
+function ProjectRow({
+  project,
+  meta,
+  action,
+  onClick,
+}: {
+  project: DiscoveredProject;
+  meta: string;
+  action: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      className="mxCard mxRow"
+      style={{
+        padding: "0.9rem 1rem",
+        cursor: "pointer",
+        font: "inherit",
+        textAlign: "left",
+        width: "100%",
+      }}
+      onClick={onClick}
+    >
+      {project.logoUri ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={project.logoUri}
+          alt=""
+          style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }}
+        />
+      ) : (
+        <Avatar address={`${project.chainId}:${project.projectId}`} size={40} />
+      )}
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 500 }}>
+          {project.name ?? `Project #${project.projectId}`}
+        </div>
+        <div className="mxHint">
+          {CHAIN_NAME[project.chainId] ?? `Chain ${project.chainId}`} · {meta}
+        </div>
+      </div>
+      <span className="mxChip">{action}</span>
+    </button>
+  );
+}
+
+function Discovery({ onStart }: { onStart: () => void }) {
+  const { address } = useAccount();
+  const [data, setData] = useState<{
+    asCustomer: CustomerProject[];
+    asOwner: OwnerProject[];
+  } | null>(null);
+
+  useEffect(() => {
+    if (!address) return;
+    let live = true;
+    const timer = setTimeout(() => {
+      void fetch(`/api/juicebox/discovery?address=${address}`)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body) => {
+          if (live && body) setData(body);
+        })
+        .catch(() => undefined);
+    }, 0);
+    return () => {
+      live = false;
+      clearTimeout(timer);
+    };
+  }, [address]);
+
+  if (!data || (data.asCustomer.length === 0 && data.asOwner.length === 0)) {
+    return null;
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 20 }}>
+      {data.asCustomer.length > 0 ? (
+        <section style={{ display: "grid", gap: 8 }}>
+          <h2 className="mxDisplay" style={{ margin: 0, fontSize: 15 }}>
+            Start a chat — projects you&apos;ve paid
+          </h2>
+          {data.asCustomer.map((project) => (
+            <ProjectRow
+              key={`c-${project.chainId}-${project.projectId}`}
+              project={project}
+              meta={`${project.paymentsCount} payment${project.paymentsCount === 1 ? "" : "s"}`}
+              action="Open support"
+              onClick={onStart}
+            />
+          ))}
+        </section>
+      ) : null}
+
+      {data.asOwner.length > 0 ? (
+        <section style={{ display: "grid", gap: 8 }}>
+          <h2 className="mxDisplay" style={{ margin: 0, fontSize: 15 }}>
+            Your projects — customers who can reach you
+          </h2>
+          {data.asOwner.map((project) => (
+            <ProjectRow
+              key={`o-${project.chainId}-${project.projectId}`}
+              project={project}
+              meta={`${project.payerCount} payer${project.payerCount === 1 ? "" : "s"}`}
+              action="Owner"
+              onClick={onStart}
+            />
+          ))}
+        </section>
+      ) : null}
+    </div>
   );
 }
 
