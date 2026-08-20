@@ -175,6 +175,7 @@ export interface MessagingHttpHandlers {
   ) => Promise<Response>;
   readonly policyWitnessSync: (request: Request) => Promise<Response>;
   readonly externalSenderRotation: (request: Request) => Promise<Response>;
+  readonly rpcDiagnostics: (request: Request) => Promise<Response>;
   readonly registerPushEndpoint: (
     request: Request,
     installationId: string,
@@ -238,6 +239,9 @@ export function createMessagingHttpHandlers(
     } | null;
     readonly plans: ConversationPlanStore | null;
     readonly provisioningSeed: Buffer | null;
+    readonly rpcEndpoints: Readonly<
+      Record<string, readonly { providerId: string; url: string }[]>
+    > | null;
     readonly chainRegistry: ChainTransportRegistry | null;
     readonly deliveryStore: PostgresDeliveryAppendStore;
     readonly appendKeys: {
@@ -347,6 +351,7 @@ export function createMessagingHttpHandlers(
         ? serviceTrustContext(config.provisioningSeed)
         : null,
       provisioningSeed: config.provisioningSeed ?? null,
+      rpcEndpoints: config.rpcEndpoints ?? null,
       policyWitnessSubmit:
         contextValue.policyWitnessSubmit ??
         (process.env.JBM_WITNESS_URL && process.env.JBM_WITNESS_SUBMIT_TOKEN
@@ -1430,6 +1435,71 @@ export function createMessagingHttpHandlers(
         wired.policyWitnessSubmit,
       );
       return jsonNoStore(200, report);
+    },
+
+    async rpcDiagnostics(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.internalSyncToken) return notFound();
+      const authorization = request.headers.get("authorization");
+      if (authorization !== `Bearer ${wired.internalSyncToken}`) {
+        return problem(401, "unauthorized");
+      }
+      if (!wired.rpcEndpoints) {
+        return jsonNoStore(200, { configured: false, chains: [] });
+      }
+      const readStage = async (
+        transport: { providerId: string; request: (m: string, p: readonly unknown[]) => Promise<unknown> },
+        method: string,
+        params: readonly unknown[],
+      ): Promise<{ providerId: string; ok: boolean; value?: string; error?: string }> => {
+        try {
+          const result = (await transport.request(method, params)) as Record<string, unknown> | string | null;
+          const value =
+            typeof result === "string"
+              ? result
+              : result && typeof result === "object"
+                ? String((result as Record<string, unknown>).number ?? (result as Record<string, unknown>).hash ?? "")
+                : "";
+          return { providerId: transport.providerId, ok: true, value };
+        } catch (error) {
+          return { providerId: transport.providerId, ok: false, error: String(error).slice(0, 120) };
+        }
+      };
+      const chains: unknown[] = [];
+      for (const [chainId, endpoints] of Object.entries(wired.rpcEndpoints)) {
+        const ratified = finalityProfileSet.profiles.find((profile) => profile.chainId === chainId);
+        const transports = endpoints.map((endpoint) =>
+          createHttpJsonRpcTransport({ providerId: endpoint.providerId, url: endpoint.url }),
+        );
+        const heads = await Promise.all(
+          transports.map((transport) => readStage(transport, "eth_getBlockByNumber", ["finalized", false])),
+        );
+        const nums = heads
+          .filter((head) => head.ok && /^0x[0-9a-f]+$/i.test(head.value ?? ""))
+          .map((head) => BigInt(head.value as string));
+        let hashAgree: boolean | null = null;
+        let hashes: { providerId: string; ok: boolean; value?: string; error?: string }[] = [];
+        if (nums.length === transports.length && nums.length > 0) {
+          const lowest = nums.reduce((low, n) => (n < low ? n : low));
+          hashes = await Promise.all(
+            transports.map((transport) =>
+              readStage(transport, "eth_getBlockByNumber", [`0x${lowest.toString(16)}`, false]),
+            ),
+          );
+          const set = new Set(hashes.filter((h) => h.ok).map((h) => h.value));
+          hashAgree = hashes.every((h) => h.ok) && set.size === 1;
+        }
+        chains.push({
+          chainId,
+          ratified: Boolean(ratified),
+          heads: heads.map((h) => ({ providerId: h.providerId, ok: h.ok, error: h.error })),
+          headsAllOk: heads.every((h) => h.ok),
+          hashAgree,
+          hashErrors: hashes.filter((h) => !h.ok).map((h) => ({ providerId: h.providerId, error: h.error })),
+        });
+      }
+      return jsonNoStore(200, { configured: true, chains });
     },
 
     async externalSenderRotation(request: Request): Promise<Response> {
