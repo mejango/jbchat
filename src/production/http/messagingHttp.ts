@@ -428,7 +428,7 @@ export function createMessagingHttpHandlers(
     const verdict = verifyDpopProof({
       proof: request.headers.get("dpop"),
       method: request.method,
-      url: request.url,
+      url: externalRequestUrl(request),
       accessToken,
       expectedJkt: Buffer.from(row.installation_auth_jkt as Uint8Array),
       nowEpochMilliseconds: Date.parse(nowIso),
@@ -587,7 +587,7 @@ export function createMessagingHttpHandlers(
       const verdict = verifyDpopProof({
         proof: request.headers.get("dpop"),
         method: request.method,
-        url: request.url,
+        url: externalRequestUrl(request),
         accessToken: refreshToken,
         expectedJkt: Buffer.from(
           sessions[0].installation_auth_jkt as Uint8Array,
@@ -1969,4 +1969,24 @@ function problem(status: number, reasonCode: string): Response {
 
 function notFound(): Response {
   return problem(404, "not_found");
+}
+
+/**
+ * The externally-visible request URL for DPoP htu binding. Behind a
+ * TLS-terminating proxy (Railway) the node server sees the connection as
+ * http, so raw request.url carries the wrong scheme/host and never matches
+ * the client's htu (built from window.location.origin = https). The
+ * security middleware has already 421'd any request whose forwarded origin
+ * is not the canonical origin, so the forwarded headers are trustworthy
+ * here; fall back to request.url for direct/local requests.
+ */
+function externalRequestUrl(request: Request): string {
+  const url = new URL(request.url);
+  const proto = request.headers.get("x-forwarded-proto");
+  const host =
+    request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+  if (proto && host && !proto.includes(",") && !host.includes(",")) {
+    return `${proto}://${host}${url.pathname}`;
+  }
+  return `${url.protocol}//${url.host}${url.pathname}`;
 }
