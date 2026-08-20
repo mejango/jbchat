@@ -184,10 +184,17 @@ export async function readCodeAtBlock(
   try {
     codes = await Promise.all(
       transports.map(async (transport) => {
-        const code = await transport.request("eth_getCode", [
-          address,
-          `0x${blockNumber.toString(16)}`,
-        ]);
+        const params = [address, `0x${blockNumber.toString(16)}`];
+        let code: unknown;
+        try {
+          code = await transport.request("eth_getCode", params);
+        } catch {
+          // A timeout/transient error is "no answer", not a disagreement —
+          // one retry keeps the all-must-answer quorum intact while
+          // tolerating a single slow provider. A malformed answer below is
+          // a definitive bad response and is NOT retried.
+          code = await transport.request("eth_getCode", params);
+        }
         if (typeof code !== "string" || !HEX_DATA.test(code.toLowerCase())) {
           throw new Error("Malformed code response.");
         }

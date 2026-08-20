@@ -127,6 +127,26 @@ function scriptedTransport(
   });
 }
 
+// A transport whose eth_getCode throws (times out) the first `failCodeTimes`
+// calls, then answers `code`. Everything else behaves normally.
+function flakyCodeTransport(
+  providerId: string,
+  code: string,
+  failCodeTimes: number,
+): JsonRpcTransport {
+  let codeCalls = 0;
+  const good = scriptedTransport(providerId, { code });
+  return Object.freeze({
+    providerId,
+    async request(method: string, params: readonly unknown[]) {
+      if (method === "eth_getCode" && codeCalls++ < failCodeTimes) {
+        throw new Error("TimeoutError: aborted due to timeout");
+      }
+      return good.request(method, params);
+    },
+  });
+}
+
 function registryOf(...transports: JsonRpcTransport[]) {
   return {
     transportsFor: (chainId: number) =>
@@ -386,6 +406,44 @@ describe("quorum wallet proof verifier", () => {
       signature,
     });
     expect(verdict).toMatchObject({ status: "verified", method: "eoa" });
+  });
+
+  it("tolerates a single slow provider on eth_getCode via one retry", async () => {
+    // One provider times out the first getCode read, then answers; the
+    // retry keeps the all-must-answer quorum intact so verification still
+    // succeeds (mirrors the observed mainnet dwellir timeout).
+    const verifier = createQuorumWalletProofVerifier(
+      profileWith(
+        flakyCodeTransport("prov-a", "0x", 1),
+        scriptedTransport("prov-b", { code: "0x" }),
+      ),
+    );
+    const verdict = await verifier.verify({
+      chainId: "eip155:8453",
+      address: walletAddress,
+      message: MESSAGE,
+      signature,
+    });
+    expect(verdict).toMatchObject({ status: "verified", method: "eoa" });
+  });
+
+  it("stays unavailable when a provider fails eth_getCode twice", async () => {
+    // The retry is bounded: a provider that never answers still collapses
+    // the quorum (no smaller-quorum acceptance).
+    const verifier = createQuorumWalletProofVerifier(
+      profileWith(
+        flakyCodeTransport("prov-a", "0x", 2),
+        scriptedTransport("prov-b", { code: "0x" }),
+      ),
+    );
+    await expect(
+      verifier.verify({
+        chainId: "eip155:8453",
+        address: walletAddress,
+        message: MESSAGE,
+        signature,
+      }),
+    ).resolves.toEqual({ status: "unavailable" });
   });
 
   it("fails closed for contract wallets, unknown chains, and bad signatures", async () => {
