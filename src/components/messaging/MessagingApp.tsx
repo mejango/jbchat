@@ -181,7 +181,7 @@ function EnrollPanel() {
       {step === "error" ? (
         <p className="mxError" style={{ marginTop: 8 }}>
           {reason === "enrollment_verification_unavailable"
-            ? "Chain verification is unavailable for this wallet\u2019s network right now. Contract wallets are not yet supported - use an EOA."
+            ? "Chain verification is unavailable for this wallet\u2019s network right now. Smart-contract wallets aren\u2019t supported yet; a regular or 7702-delegated EOA works."
             : reason === "browser_missing_ed25519"
               ? "This browser cannot generate Ed25519 keys. Use a current Chrome, Edge, or Safari."
               : `Enrollment was refused (${reason}).`}

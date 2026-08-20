@@ -369,6 +369,25 @@ describe("quorum wallet proof verifier", () => {
     );
   });
 
+  it("verifies an EIP-7702 delegated EOA (code is a delegation, not a contract)", async () => {
+    // 0xef0100 || 20-byte delegate address — the account still signs with
+    // its key, so EIP-191 recovery proves control.
+    const delegation = "0xef0100" + "63c0c19a282a1b52b07dd5a65b58948a07dae32b";
+    const verifier = createQuorumWalletProofVerifier(
+      profileWith(
+        scriptedTransport("prov-a", { code: delegation }),
+        scriptedTransport("prov-b", { code: delegation }),
+      ),
+    );
+    const verdict = await verifier.verify({
+      chainId: "eip155:8453",
+      address: walletAddress,
+      message: MESSAGE,
+      signature,
+    });
+    expect(verdict).toMatchObject({ status: "verified", method: "eoa" });
+  });
+
   it("fails closed for contract wallets, unknown chains, and bad signatures", async () => {
     const contractWallet = createQuorumWalletProofVerifier(
       profileWith(

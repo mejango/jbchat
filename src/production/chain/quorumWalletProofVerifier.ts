@@ -93,8 +93,18 @@ export function createQuorumWalletProofVerifier(
         lowestFinalized,
       );
       if (code.status !== "ok") return unavailable;
-      if (code.code.byteLength !== 0) {
-        // A contract wallet needs bounded ERC-1271/6492 execution.
+      // An empty account is a plain EOA. An account whose code is exactly an
+      // EIP-7702 delegation (0xef0100 || 20-byte delegate) is still an EOA:
+      // the key signs personal_sign / EIP-191 directly, so recovery proves
+      // control with no on-chain execution. Any OTHER code is a real
+      // contract wallet needing bounded ERC-1271/6492 execution we don't run.
+      const isPlainEoa = code.code.byteLength === 0;
+      const isDelegatedEoa =
+        code.code.byteLength === 23 &&
+        code.code[0] === 0xef &&
+        code.code[1] === 0x01 &&
+        code.code[2] === 0x00;
+      if (!isPlainEoa && !isDelegatedEoa) {
         return unavailable;
       }
 
