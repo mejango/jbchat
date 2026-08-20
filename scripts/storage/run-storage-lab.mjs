@@ -893,6 +893,7 @@ async function main() {
         "src/production/storage/policyHeadIssuance.pgtest.ts",
         "src/production/storage/cursorNonceAllocator.pgtest.ts",
         "src/production/storage/externalSenderRotation.pgtest.ts",
+        "src/production/storage/conversationRequest.pgtest.ts",
         "src/production/witness/witnessCore.pgtest.ts",
       ],
       {

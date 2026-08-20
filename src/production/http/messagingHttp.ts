@@ -45,6 +45,10 @@ import {
   type ConversationPlanStore,
 } from "../storage/conversationPlanStore";
 import {
+  createConversationRequestStore,
+  type ConversationRequestStore,
+} from "../storage/conversationRequestStore";
+import {
   createPostgresDeliveryAppendStore,
   type PostgresDeliveryAppendStore,
 } from "../storage/postgresDeliveryStore";
@@ -146,6 +150,8 @@ export interface MessagingHttpHandlers {
   ) => Promise<Response>;
   readonly createPurchaseClaim: (request: Request) => Promise<Response>;
   readonly createConversationPlan: (request: Request) => Promise<Response>;
+  readonly createConversationRequest: (request: Request) => Promise<Response>;
+  readonly listConversationRequests: (request: Request) => Promise<Response>;
   readonly activateConversation: (request: Request) => Promise<Response>;
   readonly listConversations: (request: Request) => Promise<Response>;
   readonly registerProjectStaff: (
@@ -239,6 +245,7 @@ export function createMessagingHttpHandlers(
       readonly manifestId: string;
     } | null;
     readonly plans: ConversationPlanStore | null;
+    readonly requests: ConversationRequestStore;
     readonly provisioningSeed: Buffer | null;
     readonly rpcEndpoints: Readonly<
       Record<string, readonly { providerId: string; url: string }[]>
@@ -325,6 +332,11 @@ export function createMessagingHttpHandlers(
           hmacEligibilityClaimHandle: crypto.hmacEligibilityClaimHandle,
         });
       })(),
+      requests: createConversationRequestStore({
+        sql,
+        hmacEligibilityClaimHandle: crypto.hmacEligibilityClaimHandle,
+        now: now as never,
+      }),
       chainRegistry:
         contextValue.chainRegistry ?? registryFromEndpoints(config.rpcEndpoints),
       deliveryStore: createPostgresDeliveryAppendStore({
@@ -902,6 +914,40 @@ export function createMessagingHttpHandlers(
         return problem(503, issued.reasonCode);
       }
       return problem(issued.status === "ineligible" ? 403 : 400, issued.reasonCode);
+    },
+
+    async createConversationRequest(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const handle = (body as Record<string, unknown>).eligibilityClaimHandle;
+      if (typeof handle !== "string") return problem(400, "malformed_request");
+      const result = await wired.requests.createRequest({
+        requesterAccountId: session.accountId,
+        requesterInstallationId: session.installationId,
+        eligibilityClaimHandle: handle,
+      });
+      if (result.status === "refused") {
+        return problem(
+          result.reasonCode === "conversation_exists" ? 409 : 403,
+          result.reasonCode,
+        );
+      }
+      return jsonNoStore(result.status === "created" ? 201 : 200, result);
+    },
+
+    async listConversationRequests(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const items = await wired.requests.listForOwnerInstallation(
+        session.installationId,
+      );
+      return jsonNoStore(200, { requests: items });
     },
 
     async createConversationPlan(request: Request): Promise<Response> {

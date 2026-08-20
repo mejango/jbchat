@@ -247,6 +247,8 @@ function Inbox() {
 
       <Discovery onStart={() => setClaimOpen(true)} />
 
+      <RequestsQueue />
+
       {conversations === null ? (
         <p className="mxHint">Loading your inbox…</p>
       ) : conversations.length === 0 ? (
@@ -349,6 +351,70 @@ function PushToggle() {
     >
       {state === "on" ? "Notifications on" : "Notify me"}
     </button>
+  );
+}
+
+interface OwnerRequest {
+  requestId: string;
+  chainId: string;
+  projectId: string;
+  requesterAccountId: string;
+  createdAt: string;
+}
+
+const CHAIN_LABEL: Record<string, string> = {
+  "eip155:1": "Ethereum",
+  "eip155:10": "Optimism",
+  "eip155:8453": "Base",
+  "eip155:42161": "Arbitrum",
+};
+
+function RequestsQueue() {
+  const [requests, setRequests] = useState<OwnerRequest[] | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      void api("GET", "/v1/conversation-requests")
+        .then((response) => (response.ok ? response.json() : null))
+        .then((body) => {
+          if (live && body) setRequests(body.requests ?? []);
+        })
+        .catch(() => undefined);
+    const kickoff = setTimeout(load, 0);
+    const interval = setInterval(load, 20000);
+    return () => {
+      live = false;
+      clearTimeout(kickoff);
+      clearInterval(interval);
+    };
+  }, []);
+
+  if (!requests || requests.length === 0) return null;
+
+  return (
+    <section style={{ display: "grid", gap: 8 }}>
+      <h2 className="mxDisplay" style={{ margin: 0, fontSize: 15 }}>
+        Requests to attend — customers waiting to reach you
+      </h2>
+      {requests.map((request) => (
+        <div
+          key={request.requestId}
+          className="mxCard mxRow"
+          style={{ padding: "0.9rem 1rem" }}
+        >
+          <Avatar address={request.requesterAccountId} size={40} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 500 }}>
+              Project #{request.projectId} ·{" "}
+              {CHAIN_LABEL[request.chainId] ?? request.chainId}
+            </div>
+            <div className="mxHint">A paid customer wants to start a chat.</div>
+          </div>
+          <span className="mxChip">Waiting</span>
+        </div>
+      ))}
+    </section>
   );
 }
 
