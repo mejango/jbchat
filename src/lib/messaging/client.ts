@@ -13,7 +13,11 @@
  */
 
 import { idbGet, idbSet } from "./idb";
-import { generateMlsKeyPackage, mlsSignaturePublicKey } from "./mls";
+import {
+  generateMlsKeyPackage,
+  mlsSignaturePublicKey,
+  resetMlsIdentity,
+} from "./mls";
 
 const MEDIA_TYPE = "application/vnd.juicebox.messaging.v1+json";
 const REFRESH_KEY = "jbm-messaging-refresh-v1";
@@ -318,7 +322,9 @@ export async function enrollDevice(input: {
   )) as { x: string; y: string };
   // Real MLS identity + KeyPackage from the wasm client core; the raw
   // Ed25519 public key doubles as the credential public the service
-  // records.
+  // records. Each enrollment attempt starts a fresh identity so its
+  // fingerprint never collides with an earlier, abandoned attempt.
+  await resetMlsIdentity();
   const mlsPublicRaw = await mlsSignaturePublicKey();
   const keyPackageBytes = await generateMlsKeyPackage();
 

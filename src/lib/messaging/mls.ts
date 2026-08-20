@@ -48,6 +48,20 @@ export function mlsClient(): Promise<MlsClient> {
   return instance;
 }
 
+/**
+ * Start a brand-new MLS identity for a fresh enrollment. The device's
+ * credential fingerprint is UNIQUE server-side, so reusing a persisted
+ * identity across enrollment attempts collides; each attempt gets its
+ * own. Only the attempt that actually enrolls keeps its identity (later
+ * calls reuse it), so abandoned attempts cost nothing.
+ */
+export async function resetMlsIdentity(): Promise<void> {
+  await initWasm();
+  const client = new MlsClient(randomLabel());
+  await idbSet(MLS_STATE_KEY, client.exportState());
+  instance = Promise.resolve(client);
+}
+
 async function persisted<T>(client: MlsClient, result: T): Promise<T> {
   await idbSet(MLS_STATE_KEY, client.exportState());
   return result;
