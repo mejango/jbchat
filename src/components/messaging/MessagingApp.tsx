@@ -14,7 +14,6 @@ import {
   canDecrypt,
   decryptedMessages,
   sendMessage,
-  startConversation,
   syncWelcomes,
   type CachedMessage,
 } from "@/lib/messaging/conversation";
@@ -197,7 +196,6 @@ function Inbox() {
     ConversationSummary[] | null
   >(null);
   const [selected, setSelected] = useState<ConversationSummary | null>(null);
-  const [claimOpen, setClaimOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -239,14 +237,11 @@ function Inbox() {
         </h1>
         <div className="mxRow">
           <PushToggle />
-          <button className="mxBtnSecondary" onClick={() => setClaimOpen(true)}>
-            Claim a purchase
-          </button>
         </div>
       </div>
       {error ? <p className="mxError">{error}</p> : null}
 
-      <Discovery onStart={() => setClaimOpen(true)} />
+      <Discovery />
 
       <RequestsQueue onAccepted={reload} />
 
@@ -258,8 +253,7 @@ function Inbox() {
             No open chats yet
           </h2>
           <p style={{ color: "var(--mx-smoke-700)" }}>
-            Start one from a project you&apos;ve paid or own above, or claim a
-            purchase receipt directly.
+            Start one from a project you&apos;ve paid or own above.
           </p>
         </section>
       ) : (
@@ -294,29 +288,6 @@ function Inbox() {
           </button>
         ))
       )}
-      {claimOpen ? (
-        <ClaimPurchaseDialog
-          onClose={() => setClaimOpen(false)}
-          onClaimed={() => void reload()}
-          onOpened={(conversationId) => {
-            setClaimOpen(false);
-            void reload().then(() => {
-              setSelected(
-                (current) =>
-                  current ?? {
-                    conversationId,
-                    state: "active",
-                    deliveryPurpose: "purchase_support",
-                    role: "customer",
-                    lastPosition: "1",
-                    lastActivityAt: "",
-                    project: { chainId: "", projectId: "" },
-                  },
-              );
-            });
-          }}
-        />
-      ) : null}
     </div>
   );
 }
@@ -486,25 +457,13 @@ function ProjectRow({
   project,
   meta,
   action,
-  onClick,
 }: {
   project: DiscoveredProject;
   meta: string;
   action: string;
-  onClick: () => void;
 }) {
   return (
-    <button
-      className="mxCard mxRow"
-      style={{
-        padding: "0.9rem 1rem",
-        cursor: "pointer",
-        font: "inherit",
-        textAlign: "left",
-        width: "100%",
-      }}
-      onClick={onClick}
-    >
+    <div className="mxCard mxRow" style={{ padding: "0.9rem 1rem" }}>
       {project.logoUri ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -524,7 +483,7 @@ function ProjectRow({
         </div>
       </div>
       <span className="mxChip">{action}</span>
-    </button>
+    </div>
   );
 }
 
@@ -614,7 +573,7 @@ function CustomerCard({ project }: { project: CustomerProject }) {
   );
 }
 
-function Discovery({ onStart }: { onStart: () => void }) {
+function Discovery() {
   const { address } = useAccount();
   const [data, setData] = useState<{
     asCustomer: CustomerProject[];
@@ -675,7 +634,6 @@ function Discovery({ onStart }: { onStart: () => void }) {
               project={project}
               meta={`${project.payerCount} payer${project.payerCount === 1 ? "" : "s"}`}
               action="Owner"
-              onClick={onStart}
             />
           ))}
         </section>
@@ -832,168 +790,5 @@ function ConversationView({
         </p>
       )}
     </div>
-  );
-}
-
-function ClaimPurchaseDialog({
-  onClose,
-  onClaimed,
-  onOpened,
-}: {
-  onClose: () => void;
-  onClaimed: () => void;
-  onOpened: (conversationId: string) => void;
-}) {
-  const { address, chainId } = useAccount();
-  const [txHash, setTxHash] = useState("");
-  const [projectRefId, setProjectRefId] = useState("");
-  const [logIndex, setLogIndex] = useState("0");
-  const [terminal, setTerminal] = useState(
-    "0x130f5dd2bd8805443cf41755253d778a75a67f53",
-  );
-  const [state, setState] = useState<
-    | { phase: "form" }
-    | { phase: "claiming" }
-    | { phase: "opening" }
-    | { phase: "claimed"; capability: string; validUntil: string }
-    | { phase: "error"; reason: string }
-  >({ phase: "form" });
-
-  return (
-    <dialog
-      open
-      className="mxDialog"
-      style={{ position: "fixed", inset: 0, margin: "auto", zIndex: 60 }}
-    >
-      <form
-        style={{ padding: "1.25rem", display: "grid", gap: 12 }}
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (!address || !chainId) return;
-          setState({ phase: "claiming" });
-          const response = await api("POST", "/v1/eligibility/purchase-claims", {
-            projectRefId: projectRefId.trim(),
-            walletRef: `eip155:${chainId}:${address.toLowerCase()}`,
-            transactionHash: txHash.trim().toLowerCase(),
-            payLogIndex: Number(logIndex),
-            terminal: terminal.trim().toLowerCase(),
-          });
-          if (response.status === 201) {
-            const body = (await response.json()) as {
-              capability: string;
-              validUntil: string;
-              claimHandle: string;
-            };
-            // The grant is live: open the encrypted channel right away -
-            // plan, build the MLS group on this device, activate.
-            setState({ phase: "opening" });
-            try {
-              const conversationId = await startConversation(body.claimHandle);
-              onClaimed();
-              onOpened(conversationId);
-            } catch (openError) {
-              setState({
-                phase: "error",
-                reason:
-                  openError instanceof Error
-                    ? openError.message
-                    : "conversation_open_failed",
-              });
-              onClaimed();
-            }
-            return;
-          }
-          const body = (await response
-            .json()
-            .catch(() => ({ reasonCode: "claim_failed" }))) as {
-            reasonCode?: string;
-          };
-          setState({
-            phase: "error",
-            reason: body.reasonCode ?? "claim_failed",
-          });
-        }}
-      >
-        <h2 className="mxDisplay" style={{ margin: 0, fontSize: 18 }}>
-          Claim a purchase
-        </h2>
-        <p className="mxHint" style={{ margin: 0 }}>
-          Your payment receipt is verified against finalized chain state
-          through an independent RPC quorum. Nothing is sent on-chain.
-        </p>
-        <div>
-          <label className="mxLabel">Payment transaction hash</label>
-          <input
-            className="mxInput"
-            required
-            placeholder="0x…"
-            value={txHash}
-            onChange={(event) => setTxHash(event.target.value)}
-          />
-        </div>
-        <div>
-          <label className="mxLabel">Project reference ID</label>
-          <input
-            className="mxInput"
-            required
-            placeholder="From the project\u2019s messaging link"
-            value={projectRefId}
-            onChange={(event) => setProjectRefId(event.target.value)}
-          />
-        </div>
-        <div className="mxRow">
-          <div style={{ flex: 1 }}>
-            <label className="mxLabel">Pay log index</label>
-            <input
-              className="mxInput"
-              required
-              value={logIndex}
-              onChange={(event) => setLogIndex(event.target.value)}
-            />
-          </div>
-          <div style={{ flex: 2 }}>
-            <label className="mxLabel">Terminal</label>
-            <input
-              className="mxInput"
-              required
-              value={terminal}
-              onChange={(event) => setTerminal(event.target.value)}
-            />
-          </div>
-        </div>
-        {state.phase === "opening" ? (
-          <p className="mxHint" style={{ margin: 0 }}>
-            Receipt verified. Opening your encrypted channel…
-          </p>
-        ) : null}
-        {state.phase === "claimed" ? (
-          <p style={{ color: "var(--mx-melon)", margin: 0 }}>
-            Verified. Your {state.capability} grant is active until{" "}
-            {new Date(state.validUntil).toLocaleTimeString()}.
-          </p>
-        ) : null}
-        {state.phase === "error" ? (
-          <p className="mxError" style={{ margin: 0 }}>
-            The claim was not accepted ({state.reason}).
-          </p>
-        ) : null}
-        <div className="mxRow" style={{ justifyContent: "flex-end" }}>
-          <button type="button" className="mxBtnSecondary" onClick={onClose}>
-            Close
-          </button>
-          <button
-            type="submit"
-            className="mxBtnPrimary"
-            disabled={state.phase === "claiming" || state.phase === "opening"}
-          >
-            {state.phase === "claiming"
-              ? "Verifying…"
-              : state.phase === "opening"
-                ? "Opening…"
-                : "Verify receipt"}
-          </button>
-        </div>
-      </form>
-    </dialog>
   );
 }
