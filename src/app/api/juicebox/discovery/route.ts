@@ -13,7 +13,7 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const discovery = await new BendystrawDiscoveryAdapter().discover(address);
     return Response.json(discovery, {
-      headers: { "Cache-Control": "private, max-age=30" },
+      headers: { "Cache-Control": "no-store" },
     });
   } catch {
     return Response.json({ asCustomer: [], asOwner: [] }, { status: 200 });

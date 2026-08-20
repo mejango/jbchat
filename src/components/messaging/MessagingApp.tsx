@@ -430,17 +430,23 @@ function Discovery({ onStart }: { onStart: () => void }) {
   useEffect(() => {
     if (!address) return;
     let live = true;
-    const timer = setTimeout(() => {
-      void fetch(`/api/juicebox/discovery?address=${address}`)
+    const load = () =>
+      void fetch(`/api/juicebox/discovery?address=${address}`, {
+        cache: "no-store",
+      })
         .then((response) => (response.ok ? response.json() : null))
         .then((body) => {
           if (live && body) setData(body);
         })
         .catch(() => undefined);
-    }, 0);
+    const kickoff = setTimeout(load, 0);
+    // Re-poll so a fresh payment shows up once bendystraw indexes it,
+    // without a manual refresh.
+    const interval = setInterval(load, 20000);
     return () => {
       live = false;
-      clearTimeout(timer);
+      clearTimeout(kickoff);
+      clearInterval(interval);
     };
   }, [address]);
 
