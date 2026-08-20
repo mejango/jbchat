@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import postgres, { type Sql, type TransactionSql } from "postgres";
 import { createKeyedIdentityCrypto } from "../identity/identityKeyedCrypto";
 import { createConversationRequestStore } from "./conversationRequestStore";
+import { ensureProjectRef } from "./projectRefProvision";
 
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
 const describeStorage = DATABASE_URL ? describe : describe.skip;
@@ -170,5 +171,27 @@ describeStorage("conversation requests", () => {
       CUSTOMER_INSTALLATION_ID,
     );
     expect(queue.length).toBe(0);
+  });
+
+  it("provisions a project_ref on demand, deterministically and idempotently", async () => {
+    const seed = Buffer.alloc(32, 0xef);
+    const input = {
+      chainId: 8453,
+      projectId: 777,
+      projectsContract: "0x6017d1fba9dc279bfa0b03fd931c22e242ab3691",
+    };
+    const first = await ensureProjectRef(sql, seed, NOW, input);
+    const second = await ensureProjectRef(sql, seed, NOW, input);
+    expect(second).toBe(first);
+    const rows = await sql`
+      SELECT chain_id, project_id::text AS project_id, status
+      FROM project_refs WHERE project_ref_id = ${first}`;
+    expect(rows.length).toBe(1);
+    expect(rows[0].chain_id).toBe("eip155:8453");
+    expect(rows[0].project_id).toBe("777");
+    expect(rows[0].status).toBe("active");
+    const policies = await sql`
+      SELECT count(*)::int AS c FROM policies WHERE project_ref_id = ${first}`;
+    expect(policies[0].c).toBe(1);
   });
 });

@@ -428,6 +428,7 @@ interface DiscoveredProject {
 interface CustomerProject extends DiscoveredProject {
   volume: string;
   paymentsCount: number;
+  latestPayment: { txHash: string; logIndex: number } | null;
 }
 interface OwnerProject extends DiscoveredProject {
   payerCount: number;
@@ -486,6 +487,92 @@ function ProjectRow({
   );
 }
 
+const V6_TERMINAL = "0x130f5dd2bd8805443cf41755253d778a75a67f53";
+
+function CustomerCard({ project }: { project: CustomerProject }) {
+  const { address } = useAccount();
+  const [state, setState] = useState<
+    "idle" | "working" | "requested" | "opened" | "error"
+  >("idle");
+
+  const start = async () => {
+    if (!address || !project.latestPayment) {
+      setState("error");
+      return;
+    }
+    setState("working");
+    try {
+      const claim = await api("POST", "/v1/eligibility/purchase-claims", {
+        chainId: project.chainId,
+        projectId: project.projectId,
+        walletRef: `eip155:${project.chainId}:${address.toLowerCase()}`,
+        transactionHash: project.latestPayment.txHash,
+        payLogIndex: project.latestPayment.logIndex,
+        terminal: V6_TERMINAL,
+      });
+      if (claim.status !== 201) {
+        setState("error");
+        return;
+      }
+      const { claimHandle } = (await claim.json()) as { claimHandle: string };
+      const requested = await api("POST", "/v1/conversation-requests", {
+        eligibilityClaimHandle: claimHandle,
+      });
+      setState(requested.ok ? "requested" : "error");
+    } catch {
+      setState("error");
+    }
+  };
+
+  const label =
+    state === "working"
+      ? "Requesting…"
+      : state === "requested"
+        ? "Requested ✓"
+        : state === "error"
+          ? "Try again"
+          : project.latestPayment
+            ? "Open support"
+            : "No payment found";
+
+  return (
+    <button
+      className="mxCard mxRow"
+      style={{
+        padding: "0.9rem 1rem",
+        cursor: project.latestPayment ? "pointer" : "default",
+        font: "inherit",
+        textAlign: "left",
+        width: "100%",
+      }}
+      disabled={state === "working" || state === "requested" || !project.latestPayment}
+      onClick={() => void start()}
+    >
+      {project.logoUri ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={project.logoUri}
+          alt=""
+          style={{ width: 40, height: 40, borderRadius: 8, objectFit: "cover" }}
+        />
+      ) : (
+        <Avatar address={`${project.chainId}:${project.projectId}`} size={40} />
+      )}
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 500 }}>
+          {project.name ?? `Project #${project.projectId}`}
+        </div>
+        <div className="mxHint">
+          {CHAIN_NAME[project.chainId] ?? `Chain ${project.chainId}`} ·{" "}
+          {project.paymentsCount} payment
+          {project.paymentsCount === 1 ? "" : "s"}
+        </div>
+      </div>
+      <span className="mxChip">{label}</span>
+    </button>
+  );
+}
+
 function Discovery({ onStart }: { onStart: () => void }) {
   const { address } = useAccount();
   const [data, setData] = useState<{
@@ -528,12 +615,9 @@ function Discovery({ onStart }: { onStart: () => void }) {
             Start a chat — projects you&apos;ve paid
           </h2>
           {data.asCustomer.map((project) => (
-            <ProjectRow
+            <CustomerCard
               key={`c-${project.chainId}-${project.projectId}`}
               project={project}
-              meta={`${project.paymentsCount} payment${project.paymentsCount === 1 ? "" : "s"}`}
-              action="Open support"
-              onClick={onStart}
             />
           ))}
         </section>

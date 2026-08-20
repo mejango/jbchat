@@ -19,9 +19,14 @@ export interface DiscoveredProject {
   readonly isRevnet: boolean;
 }
 
+export interface LatestPayment {
+  readonly txHash: string;
+  readonly logIndex: number;
+}
 export interface CustomerProject extends DiscoveredProject {
   readonly volume: string;
   readonly paymentsCount: number;
+  readonly latestPayment: LatestPayment | null;
 }
 
 export interface OwnerProject extends DiscoveredProject {
@@ -98,18 +103,26 @@ export class BendystrawDiscoveryAdapter {
     // Resolve names/logos for the paid projects in one aliased query.
     const meta = await this.#resolveMeta(endpoint, payerItems);
 
-    const asCustomer: CustomerProject[] = payerItems.map((item) => {
-      const key = `${item.chainId}:${item.projectId}`;
-      return {
-        chainId: item.chainId,
-        projectId: item.projectId,
-        name: meta.get(key)?.name ?? null,
-        logoUri: meta.get(key)?.logoUri ?? null,
-        isRevnet: meta.get(key)?.isRevnet ?? false,
-        volume: item.volume,
-        paymentsCount: item.paymentsCount,
-      };
-    });
+    const asCustomer: CustomerProject[] = await Promise.all(
+      payerItems.map(async (item) => {
+        const key = `${item.chainId}:${item.projectId}`;
+        return {
+          chainId: item.chainId,
+          projectId: item.projectId,
+          name: meta.get(key)?.name ?? null,
+          logoUri: meta.get(key)?.logoUri ?? null,
+          isRevnet: meta.get(key)?.isRevnet ?? false,
+          volume: item.volume,
+          paymentsCount: item.paymentsCount,
+          latestPayment: await this.#latestPayment(
+            endpoint,
+            lower,
+            item.chainId,
+            item.projectId,
+          ),
+        };
+      }),
+    );
 
     const asOwner: OwnerProject[] = await Promise.all(
       ownedItems.map(async (item) => ({
@@ -155,6 +168,24 @@ export class BendystrawDiscoveryAdapter {
       });
     });
     return out;
+  }
+
+  async #latestPayment(
+    endpoint: string,
+    address: string,
+    chainId: number,
+    projectId: number,
+  ): Promise<LatestPayment | null> {
+    const data = await this.#query<{
+      payEvents: { items: { txHash: string; logIndex: number }[] };
+    }>(
+      endpoint,
+      `query($a: String!){ payEvents(where:{beneficiary:$a, chainId:${chainId}, projectId:${projectId}}, orderBy:"timestamp", orderDirection:"desc", limit:1){ items { txHash logIndex } } }`,
+      { a: address },
+    );
+    const item = data?.payEvents.items[0];
+    if (!item || !/^0x[0-9a-fA-F]{64}$/.test(item.txHash)) return null;
+    return { txHash: item.txHash.toLowerCase(), logIndex: item.logIndex };
   }
 
   async #payerCount(

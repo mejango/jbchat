@@ -19,6 +19,7 @@ import {
   type RatifiedChainProfile,
 } from "../chain/quorumWalletProofVerifier";
 import finalityProfileSet from "../../../config/finality-profiles.v1.json";
+import { ensureProjectRef } from "../storage/projectRefProvision";
 import {
   createEligibilityStore,
   type EligibilityStore,
@@ -243,6 +244,7 @@ export function createMessagingHttpHandlers(
     readonly eligibility: {
       readonly storeFor: (chainNumber: number) => EligibilityStore | null;
       readonly manifestId: string;
+      readonly projectsContractFor: (chainNumber: number) => string | null;
     } | null;
     readonly plans: ConversationPlanStore | null;
     readonly requests: ConversationRequestStore;
@@ -839,7 +841,6 @@ export function createMessagingHttpHandlers(
       if (body === undefined) return problem(400, "malformed_request");
       const record = body as Record<string, unknown>;
       if (
-        !UUID_PATTERN.test(String(record.projectRefId)) ||
         typeof record.walletRef !== "string" ||
         typeof record.transactionHash !== "string" ||
         !/^0x[0-9a-f]{64}$/.test(record.transactionHash) ||
@@ -850,7 +851,39 @@ export function createMessagingHttpHandlers(
       ) {
         return problem(400, "malformed_request");
       }
-      const projectRefId = String(record.projectRefId);
+
+      // Resolve the project. A caller may pass a known projectRefId, or
+      // (open, on-demand) a chainId + projectId — any project on a
+      // manifest-blessed chain is provisioned on first claim. The payment
+      // is still verified on-chain below, so opening this is safe.
+      let projectRefId: string;
+      if (UUID_PATTERN.test(String(record.projectRefId))) {
+        projectRefId = String(record.projectRefId);
+      } else if (
+        typeof record.chainId === "number" &&
+        Number.isSafeInteger(record.chainId) &&
+        typeof record.projectId === "number" &&
+        Number.isSafeInteger(record.projectId) &&
+        record.projectId >= 0
+      ) {
+        if (!wired.eligibility || !wired.provisioningSeed) return notFound();
+        const contract = wired.eligibility.projectsContractFor(
+          record.chainId,
+        );
+        if (!contract) return problem(404, "project_unknown");
+        projectRefId = await ensureProjectRef(
+          wired.sql,
+          wired.provisioningSeed,
+          now(),
+          {
+            chainId: record.chainId,
+            projectId: record.projectId,
+            projectsContract: contract,
+          },
+        );
+      } else {
+        return problem(400, "malformed_request");
+      }
 
       const projects = await wired.sql`
         SELECT chain_id, projects_contract, project_id::text AS project_id
@@ -1714,6 +1747,7 @@ function buildEligibilityLane(
 ): {
   readonly storeFor: (chainNumber: number) => EligibilityStore | null;
   readonly manifestId: string;
+  readonly projectsContractFor: (chainNumber: number) => string | null;
 } | null {
   if (!config.manifest || !registry) return null;
   let manifest: DeploymentManifest;
@@ -1765,7 +1799,15 @@ function buildEligibilityLane(
     stores.set(chainNumber, store);
     return store;
   };
-  return Object.freeze({ storeFor, manifestId: manifest.manifestId });
+  const projectsContractFor = (chainNumber: number): string | null => {
+    const chain = manifest.chains.find((entry) => entry.chainId === chainNumber);
+    return chain ? chain.projectsContract : null;
+  };
+  return Object.freeze({
+    storeFor,
+    manifestId: manifest.manifestId,
+    projectsContractFor,
+  });
 }
 
 function registryFromEndpoints(
