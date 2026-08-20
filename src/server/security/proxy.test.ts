@@ -28,6 +28,8 @@ describe("createWebSecurityProxy", () => {
     expect(response.status).toBe(200);
     expect(csp).toContain(`script-src 'nonce-${NONCE}' 'strict-dynamic'`);
     expect(csp).not.toContain("script-src 'self'");
+    // WASM stays off the embed surface.
+    expect(csp).not.toContain("'wasm-unsafe-eval'");
     expect(csp).toContain(`style-src 'self' 'nonce-${NONCE}'`);
     expect(csp).toContain("frame-ancestors https://juicebox.money");
     expect(csp).toContain("form-action 'none'");
@@ -89,6 +91,13 @@ describe("createWebSecurityProxy", () => {
     );
     expect(embed.headers.get("Content-Security-Policy")).not.toContain(
       "juicebox-messaging#service-worker",
+    );
+    // WASM (the browser MLS client) compiles on the top-level app only.
+    expect(topLevel.headers.get("Content-Security-Policy")).toContain(
+      "'wasm-unsafe-eval'",
+    );
+    expect(embed.headers.get("Content-Security-Policy")).not.toContain(
+      "'wasm-unsafe-eval'",
     );
   });
 

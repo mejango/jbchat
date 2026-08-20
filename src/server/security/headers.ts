@@ -258,7 +258,7 @@ export function buildContentSecurityPolicy(
     development ? "'self' ws: wss:" : "'self'",
     ...walletAuthConnect,
   ].join(" ");
-  const scriptSources = buildScriptSources(config, development, nonce);
+  const scriptSources = buildScriptSources(config, development, nonce, documentKind);
   const styleSources = buildStyleSources(config, development, nonce);
   const walletAuthFrames =
     documentKind === "embed"
@@ -348,6 +348,7 @@ function buildScriptSources(
   config: WebSecurityConfig,
   development: boolean,
   nonce: string | undefined,
+  documentKind: DocumentKind = "top-level",
 ): string {
   if (config.mode === "local-lab" && development) {
     return "'self' 'unsafe-inline' 'unsafe-eval'";
@@ -357,7 +358,12 @@ function buildScriptSources(
   }
   if (nonce === undefined) return "'none'";
   assertProductionNonce(nonce);
-  return `'nonce-${nonce}' 'strict-dynamic'`;
+  // 'wasm-unsafe-eval' lets the browser MLS client (and the wallet SDKs)
+  // compile WebAssembly on the top-level app. It permits ONLY WASM
+  // instantiation, never JavaScript eval() — 'unsafe-eval' stays absent.
+  // The embed surface never runs the MLS client, so it stays without it.
+  const wasm = documentKind === "embed" ? "" : " 'wasm-unsafe-eval'";
+  return `'nonce-${nonce}' 'strict-dynamic'${wasm}`;
 }
 
 function buildStyleSources(
