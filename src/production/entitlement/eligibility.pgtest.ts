@@ -63,7 +63,11 @@ describeStorage("eligibility grants", () => {
   });
 
   const grantCount = async (): Promise<number> => {
-    const rows = await sql`SELECT count(*)::int AS total FROM eligibility_grants`;
+    // Scoped to this fixture's project so a sibling suite writing grants to
+    // the shared lab DB in parallel cannot perturb the no-new-lease checks.
+    const rows = await sql`
+      SELECT count(*)::int AS total FROM eligibility_grants
+      WHERE project_ref_id = ${FIXTURE_ENTITLEMENT_PROJECT_REF_ID}`;
     return rows[0].total as number;
   };
 

@@ -35,6 +35,15 @@ export type MessagingRuntimeConfig =
           | { readonly kind: "inline"; readonly json: string };
         readonly signerPublicKey: Buffer;
       } | null;
+      readonly notifications: {
+        readonly appOrigin: string;
+        readonly email: { readonly apiKey: string; readonly from: string } | null;
+        readonly telegram: {
+          readonly botToken: string;
+          readonly botUsername: string;
+          readonly webhookSecret: string | null;
+        } | null;
+      } | null;
     }
   | { readonly status: "unconfigured" };
 
@@ -102,7 +111,50 @@ export function loadMessagingRuntimeConfig(
       environment.JBM_DEPLOYMENT_MANIFEST,
       environment.JBM_MANIFEST_SIGNER_PUBLIC_KEY,
     ),
+    notifications: parseNotifications(environment),
   });
+}
+
+/**
+ * Out-of-band notification providers. The lane exists when an app origin
+ * and at least one provider are configured; each provider (Resend email,
+ * Telegram bot) is an independent nullable sub-object. Missing providers
+ * simply do not send — the channel picker still lists them.
+ */
+function parseNotifications(
+  environment: Record<string, string | undefined>,
+): {
+  appOrigin: string;
+  email: { apiKey: string; from: string } | null;
+  telegram: {
+    botToken: string;
+    botUsername: string;
+    webhookSecret: string | null;
+  } | null;
+} | null {
+  const appOrigin = (
+    environment.JUICEBOX_MESSAGING_CANONICAL_ORIGIN ?? "https://fruitful.chat"
+  ).replace(/\/+$/, "");
+  const resendKey = environment.JBM_RESEND_API_KEY;
+  const resendFrom = environment.JBM_RESEND_FROM;
+  const email =
+    resendKey && resendFrom
+      ? Object.freeze({ apiKey: resendKey, from: resendFrom })
+      : null;
+
+  const botToken = environment.JBM_TELEGRAM_BOT_TOKEN;
+  const botUsername = environment.JBM_TELEGRAM_BOT_USERNAME;
+  const telegram =
+    botToken && botUsername
+      ? Object.freeze({
+          botToken,
+          botUsername: botUsername.replace(/^@/, ""),
+          webhookSecret: environment.JBM_TELEGRAM_WEBHOOK_SECRET ?? null,
+        })
+      : null;
+
+  if (!email && !telegram) return null;
+  return Object.freeze({ appOrigin, email, telegram });
 }
 
 /**

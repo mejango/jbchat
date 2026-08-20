@@ -17,12 +17,7 @@ import {
   syncWelcomes,
   type CachedMessage,
 } from "@/lib/messaging/conversation";
-import {
-  disablePush,
-  enablePush,
-  pushState,
-  type PushState,
-} from "@/lib/messaging/push";
+import { NotificationsButton } from "./NotificationsPanel";
 import { truncateAddress } from "@/lib/messaging/identity";
 import {
   Avatar,
@@ -236,7 +231,7 @@ function Inbox() {
           Messages
         </h1>
         <div className="mxRow">
-          <PushToggle />
+          <NotificationsButton />
         </div>
       </div>
       {error ? <p className="mxError">{error}</p> : null}
@@ -292,39 +287,6 @@ function Inbox() {
   );
 }
 
-function PushToggle() {
-  const [state, setState] = useState<PushState | "unknown">("unknown");
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    const timer = setTimeout(
-      () => void pushState().then(setState).catch(() => setState("unavailable")),
-      0,
-    );
-    return () => clearTimeout(timer);
-  }, []);
-
-  if (state === "unknown" || state === "unavailable") return null;
-  if (state === "denied") {
-    return <span className="mxHint">Notifications blocked in browser settings</span>;
-  }
-  return (
-    <button
-      className="mxBtnSecondary"
-      disabled={busy}
-      onClick={async () => {
-        setBusy(true);
-        try {
-          setState(state === "on" ? await disablePush() : await enablePush());
-        } finally {
-          setBusy(false);
-        }
-      }}
-    >
-      {state === "on" ? "Notifications on" : "Notify me"}
-    </button>
-  );
-}
 
 interface OwnerRequest {
   requestId: string;

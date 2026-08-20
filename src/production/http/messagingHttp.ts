@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { createHash, createPrivateKey, createPublicKey, randomUUID, sign as signNode } from "node:crypto";
+import { createHash, createHmac, createPrivateKey, createPublicKey, randomUUID, sign as signNode } from "node:crypto";
 import { readFileSync } from "node:fs";
 import postgres, { type Sql } from "postgres";
 import {
@@ -49,6 +49,20 @@ import {
   createConversationRequestStore,
   type ConversationRequestStore,
 } from "../storage/conversationRequestStore";
+import {
+  createNotificationChannelStore,
+  type ChannelKind,
+  type NotificationChannelStore,
+} from "../storage/notificationChannelStore";
+import {
+  createNotificationDispatcher,
+  type NotificationDispatcher,
+} from "../notify/notificationDispatch";
+import {
+  sendEmail,
+  sendTelegram,
+  telegramDeepLink,
+} from "../notify/senders";
 import {
   createPostgresDeliveryAppendStore,
   type PostgresDeliveryAppendStore,
@@ -154,6 +168,14 @@ export interface MessagingHttpHandlers {
   readonly createConversationRequest: (request: Request) => Promise<Response>;
   readonly listConversationRequests: (request: Request) => Promise<Response>;
   readonly acceptConversationRequest: (request: Request) => Promise<Response>;
+  readonly createNotificationChannel: (request: Request) => Promise<Response>;
+  readonly verifyNotificationChannel: (request: Request) => Promise<Response>;
+  readonly listNotificationChannels: (request: Request) => Promise<Response>;
+  readonly deleteNotificationChannel: (
+    request: Request,
+    channelId: string,
+  ) => Promise<Response>;
+  readonly telegramWebhook: (request: Request) => Promise<Response>;
   readonly activateConversation: (request: Request) => Promise<Response>;
   readonly listConversations: (request: Request) => Promise<Response>;
   readonly registerProjectStaff: (
@@ -263,6 +285,17 @@ export function createMessagingHttpHandlers(
     readonly trust: ReturnType<typeof serviceTrustContext> | null;
     readonly policyWitnessSubmit: PolicyWitnessSubmitPort | null;
     readonly internalSyncToken: string | null;
+    readonly notifications: NotificationChannelStore;
+    readonly notificationsConfig: {
+      readonly appOrigin: string;
+      readonly email: { readonly apiKey: string; readonly from: string } | null;
+      readonly telegram: {
+        readonly botToken: string;
+        readonly botUsername: string;
+        readonly webhookSecret: string | null;
+      } | null;
+    } | null;
+    readonly dispatcher: NotificationDispatcher | null;
   }
   let cached: Wired | null = null;
 
@@ -390,6 +423,19 @@ export function createMessagingHttpHandlers(
             }
           : null),
       internalSyncToken: process.env.JBM_INTERNAL_SYNC_TOKEN ?? null,
+      notifications: createNotificationChannelStore({
+        sql,
+        hmacSecret: (secret: string) =>
+          createHmac("sha256", config.identitySecret)
+            .update("jbm-notification-channel-secret/v1\n", "utf8")
+            .update(secret, "utf8")
+            .digest(),
+        now: now as never,
+      }),
+      notificationsConfig: config.notifications,
+      dispatcher: config.notifications
+        ? createNotificationDispatcher({ sql, config: config.notifications })
+        : null,
     };
     return cached;
   };
@@ -970,6 +1016,12 @@ export function createMessagingHttpHandlers(
           result.reasonCode,
         );
       }
+      // A newly-lodged request wakes the project's staff on their channels.
+      if (result.status === "created" && wired.dispatcher) {
+        void notifyProjectStaff(wired, result.projectRefId).catch(
+          () => undefined,
+        );
+      }
       return jsonNoStore(result.status === "created" ? 201 : 200, result);
     },
 
@@ -982,6 +1034,164 @@ export function createMessagingHttpHandlers(
         session.installationId,
       );
       return jsonNoStore(200, { requests: items });
+    },
+
+    async createNotificationChannel(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const record = body as Record<string, unknown>;
+      const kind = record.kind;
+      const target = record.target;
+      if (
+        (kind !== "email" && kind !== "telegram" && kind !== "whatsapp") ||
+        typeof target !== "string"
+      ) {
+        return problem(400, "malformed_request");
+      }
+      const cfg = wired.notificationsConfig;
+      // Refuse a channel we can't deliver a verification secret for.
+      if (kind === "email" && !cfg?.email) {
+        return problem(503, "email_unconfigured");
+      }
+      if (kind === "telegram" && !cfg?.telegram) {
+        return problem(503, "telegram_unconfigured");
+      }
+      const created = await wired.notifications.createChannel({
+        accountId: session.accountId,
+        kind: kind as ChannelKind,
+        target,
+      });
+      if (created.status === "refused") {
+        return problem(
+          created.reasonCode === "already_active" ? 409 : 400,
+          created.reasonCode,
+        );
+      }
+      if (created.kind === "email" && cfg?.email) {
+        void sendVerificationEmail(cfg, target, created.secret).catch(
+          () => undefined,
+        );
+        return jsonNoStore(201, {
+          channelId: created.channelId,
+          kind: "email",
+          verify: "code_sent",
+        });
+      }
+      if (created.kind === "telegram" && cfg?.telegram) {
+        return jsonNoStore(201, {
+          channelId: created.channelId,
+          kind: "telegram",
+          verify: "deep_link",
+          deepLink: telegramDeepLink(cfg.telegram.botUsername, created.secret),
+        });
+      }
+      // whatsapp: stored pending; no sender wired yet.
+      return jsonNoStore(201, {
+        channelId: created.channelId,
+        kind: created.kind,
+        verify: "pending_provider",
+      });
+    },
+
+    async verifyNotificationChannel(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const record = body as Record<string, unknown>;
+      if (
+        typeof record.channelId !== "string" ||
+        typeof record.code !== "string"
+      ) {
+        return problem(400, "malformed_request");
+      }
+      const result = await wired.notifications.verifyEmailCode({
+        accountId: session.accountId,
+        channelId: record.channelId,
+        code: record.code,
+      });
+      if (result.status !== "active") {
+        return problem(result.status === "expired" ? 410 : 400, result.status);
+      }
+      return jsonNoStore(200, { status: "active" });
+    },
+
+    async listNotificationChannels(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const channels = await wired.notifications.list(session.accountId);
+      return jsonNoStore(200, {
+        channels,
+        providers: {
+          email: Boolean(wired.notificationsConfig?.email),
+          telegram: Boolean(wired.notificationsConfig?.telegram),
+          whatsapp: false,
+        },
+      });
+    },
+
+    async deleteNotificationChannel(
+      request: Request,
+      channelId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "DELETE") return notFound();
+      if (!UUID_PATTERN.test(channelId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const removed = await wired.notifications.disable(
+        session.accountId,
+        channelId,
+      );
+      return removed ? new Response(null, { status: 204 }) : notFound();
+    },
+
+    async telegramWebhook(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      const cfg = wired.notificationsConfig?.telegram;
+      if (!cfg) return notFound();
+      // Telegram echoes the secret we set on the webhook; reject anything else.
+      if (
+        cfg.webhookSecret &&
+        request.headers.get("x-telegram-bot-api-secret-token") !==
+          cfg.webhookSecret
+      ) {
+        return problem(401, "unauthorized");
+      }
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return new Response(null, { status: 200 });
+      const message = (body as Record<string, unknown>).message as
+        | Record<string, unknown>
+        | undefined;
+      const text = message?.text;
+      const chat = message?.chat as Record<string, unknown> | undefined;
+      const chatId = chat?.id;
+      const match =
+        typeof text === "string" ? text.match(/^\/start\s+(\S+)/) : null;
+      if (match && (typeof chatId === "number" || typeof chatId === "string")) {
+        const redeemed = await wired.notifications.redeemTelegramToken({
+          token: match[1],
+          chatId: String(chatId),
+        });
+        if (redeemed.status === "active") {
+          void sendTelegramReply(
+            cfg.botToken,
+            String(chatId),
+            "Connected. You'll get Fruitful notifications here.",
+          ).catch(() => undefined);
+        }
+      }
+      // Telegram retries non-200s; always ack.
+      return new Response(null, { status: 200 });
     },
 
     async acceptConversationRequest(request: Request): Promise<Response> {
@@ -1399,7 +1609,17 @@ export function createMessagingHttpHandlers(
           contentEncoding: null,
         },
       } as never);
-      if (result.status === "accepted") return jsonNoStore(201, result);
+      if (result.status === "accepted") {
+        // Wake the other participants out-of-band (content stays E2E).
+        if (wired.dispatcher) {
+          void notifyConversationPeers(
+            wired,
+            conversationId,
+            session.accountId,
+          ).catch(() => undefined);
+        }
+        return jsonNoStore(201, result);
+      }
       if (result.status === "conflict") return jsonNoStore(409, result);
       if (result.status === "rejected") return jsonNoStore(422, result);
       return jsonNoStore(503, result);
@@ -1980,6 +2200,59 @@ function notFound(): Response {
  * is not the canonical origin, so the forwarded headers are trustworthy
  * here; fall back to request.url for direct/local requests.
  */
+/** Wake a project's active staff on their notification channels. */
+async function notifyProjectStaff(
+  wired: { sql: Sql; dispatcher: NotificationDispatcher | null },
+  projectRefId: string,
+): Promise<void> {
+  if (!wired.dispatcher) return;
+  const rows = await wired.sql`
+    SELECT DISTINCT account_id FROM project_staff_registrations
+    WHERE project_ref_id = ${projectRefId} AND state = 'active'`;
+  await wired.dispatcher.dispatch(
+    rows.map((row) => String(row.account_id)),
+    "request",
+  );
+}
+
+/** Wake a conversation's other participants (not the sender) on a new message. */
+async function notifyConversationPeers(
+  wired: { sql: Sql; dispatcher: NotificationDispatcher | null },
+  conversationId: string,
+  senderAccountId: string,
+): Promise<void> {
+  if (!wired.dispatcher) return;
+  const rows = await wired.sql`
+    SELECT DISTINCT account_id FROM memberships
+    WHERE conversation_id = ${conversationId}
+      AND account_id <> ${senderAccountId}`;
+  await wired.dispatcher.dispatch(
+    rows.map((row) => String(row.account_id)),
+    "message",
+  );
+}
+
+async function sendVerificationEmail(
+  cfg: { email: { apiKey: string; from: string } | null; appOrigin: string },
+  to: string,
+  code: string,
+): Promise<void> {
+  if (!cfg.email) return;
+  await sendEmail(cfg.email, {
+    to,
+    subject: "Your Fruitful verification code",
+    text: `Your Fruitful verification code is ${code}. It expires in 15 minutes.`,
+  });
+}
+
+async function sendTelegramReply(
+  botToken: string,
+  chatId: string,
+  text: string,
+): Promise<void> {
+  await sendTelegram(botToken, { chatId, text });
+}
+
 function externalRequestUrl(request: Request): string {
   const url = new URL(request.url);
   const proto = request.headers.get("x-forwarded-proto");
