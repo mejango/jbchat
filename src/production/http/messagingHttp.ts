@@ -1466,6 +1466,14 @@ export function createMessagingHttpHandlers(
           return { providerId: transport.providerId, ok: false, error: String(error).slice(0, 120) };
         }
       };
+      // Optional: probe eth_getCode for an address to catch a contract /
+      // EIP-7702-delegated wallet (non-empty code => "unavailable").
+      let probeAddress: string | null = null;
+      const body = await request.json().catch(() => null);
+      if (body && typeof (body as Record<string, unknown>).address === "string") {
+        const candidate = String((body as Record<string, unknown>).address).toLowerCase();
+        if (/^0x[0-9a-f]{40}$/.test(candidate)) probeAddress = candidate;
+      }
       const chains: unknown[] = [];
       for (const [chainId, endpoints] of Object.entries(wired.rpcEndpoints)) {
         const ratified = finalityProfileSet.profiles.find((profile) => profile.chainId === chainId);
@@ -1490,6 +1498,22 @@ export function createMessagingHttpHandlers(
           const set = new Set(hashes.filter((h) => h.ok).map((h) => h.value));
           hashAgree = hashes.every((h) => h.ok) && set.size === 1;
         }
+        let codeProbe: unknown = null;
+        if (probeAddress && nums.length === transports.length && nums.length > 0) {
+          const lowest = nums.reduce((low, n) => (n < low ? n : low));
+          const codes = await Promise.all(
+            transports.map((transport) =>
+              readStage(transport, "eth_getCode", [probeAddress, `0x${lowest.toString(16)}`]),
+            ),
+          );
+          codeProbe = codes.map((c) => ({
+            providerId: c.providerId,
+            ok: c.ok,
+            error: c.error,
+            codeLen: c.ok && typeof c.value === "string" ? (c.value.length - 2) / 2 : null,
+            prefix: c.ok && typeof c.value === "string" ? c.value.slice(0, 12) : null,
+          }));
+        }
         chains.push({
           chainId,
           ratified: Boolean(ratified),
@@ -1497,6 +1521,7 @@ export function createMessagingHttpHandlers(
           headsAllOk: heads.every((h) => h.ok),
           hashAgree,
           hashErrors: hashes.filter((h) => !h.ok).map((h) => ({ providerId: h.providerId, error: h.error })),
+          codeProbe,
         });
       }
       return jsonNoStore(200, { configured: true, chains });
