@@ -12,6 +12,7 @@ import { provisionProjectMessaging } from "./appendAuthority";
 import {
   createRelayInstallationStore,
   RELAY_KEY_PACKAGE_KIND,
+  relayStateAad,
 } from "./relayInstallationStore";
 import { fictionalRelayBridgeForTesting } from "./relayBridge.testing";
 
@@ -72,9 +73,10 @@ describeStorage("relay installations", () => {
       WHERE relay_installation_id = ${provisioned.relayInstallationId}`;
     expect(String(relay.state)).toBe("active");
     const opened = JSON.parse(
-      seal.openPayload(
+      seal.openPayloadBound(
         Buffer.from(relay.mls_state_ciphertext as Uint8Array),
         String(relay.kms_key_version),
+        relayStateAad(provisioned.relayInstallationId),
       ),
     ) as { packages: number };
     // The sealed snapshot is the post-KeyPackage state, never the bare identity.
@@ -107,9 +109,10 @@ describeStorage("relay installations", () => {
     expect(
       (
         JSON.parse(
-          seal.openPayload(
+          seal.openPayloadBound(
             Buffer.from(resealed.mls_state_ciphertext as Uint8Array),
             String(resealed.kms_key_version),
+            relayStateAad(provisioned.relayInstallationId),
           ),
         ) as { packages: number }
       ).packages,

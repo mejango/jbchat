@@ -66,6 +66,11 @@ export interface NotificationChannelStore {
   }) => Promise<{ status: "active"; accountId: string } | { status: "not_found" }>;
   readonly list: (accountId: string) => Promise<readonly NotificationChannel[]>;
   readonly disable: (accountId: string, channelId: string) => Promise<boolean>;
+  /** Inbound: the accounts that verified this exact channel target. */
+  readonly accountsForTarget: (
+    kind: ChannelKind,
+    target: string,
+  ) => Promise<readonly string[]>;
   /** Active out-of-band targets for dispatch. */
   readonly activeTargets: (
     accountId: string,
@@ -254,6 +259,14 @@ export function createNotificationChannelStore(
           AND state <> 'disabled'
         RETURNING channel_id`;
       return rows.length === 1;
+    },
+
+    async accountsForTarget(kind: ChannelKind, target: string) {
+      const rows = await sql`
+        SELECT account_id FROM notification_channels
+        WHERE kind = ${kind} AND target = ${target} AND state = 'active'
+        ORDER BY verified_at`;
+      return rows.map((row) => String(row.account_id));
     },
 
     async activeTargets(

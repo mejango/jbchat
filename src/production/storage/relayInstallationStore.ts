@@ -23,7 +23,7 @@ const KEY_PACKAGE_TTL_MILLISECONDS = 7 * 24 * 60 * 60 * 1_000;
 export const RELAY_CHANNEL_KINDS = ["telegram", "email", "whatsapp"] as const;
 export type RelayChannelKind = (typeof RELAY_CHANNEL_KINDS)[number];
 
-/** The bridge verbs a relay needs at provisioning time (bridgeClient.ts). */
+/** The state-threading bridge verbs a relay drives (bridgeClient.ts). */
 export interface RelayBridgePort {
   readonly createIdentity: (
     label: string,
@@ -31,14 +31,42 @@ export interface RelayBridgePort {
   readonly generateKeyPackage: (
     state: string,
   ) => Promise<{ state: string; keyPackage: string }>;
+  readonly joinWelcome: (
+    state: string,
+    welcomeBase64Url: string,
+  ) => Promise<{ state: string; groupId: string }>;
+  readonly sealApplication: (
+    state: string,
+    groupIdBase64Url: string,
+    plaintext: Uint8Array,
+  ) => Promise<{ state: string; message: string }>;
+  readonly openApplication: (
+    state: string,
+    groupIdBase64Url: string,
+    messageBase64Url: string,
+  ) => Promise<{ state: string; plaintext: Uint8Array }>;
+  readonly processCommit: (
+    state: string,
+    groupIdBase64Url: string,
+    commitBase64Url: string,
+  ) => Promise<{ state: string }>;
 }
 
+/** The sealed snapshot is bound to its relay_installation_id as AAD. */
 export interface RelaySealPort {
-  readonly sealPayload: (plaintext: string) => {
-    readonly ciphertext: Buffer;
-    readonly kmsKeyVersion: string;
-  };
-  readonly openPayload: (ciphertext: Buffer, kmsKeyVersion: string) => string;
+  readonly sealPayloadBound: (
+    plaintext: string,
+    associatedData: string,
+  ) => { readonly ciphertext: Buffer; readonly kmsKeyVersion: string };
+  readonly openPayloadBound: (
+    ciphertext: Buffer,
+    kmsKeyVersion: string,
+    associatedData: string,
+  ) => string;
+}
+
+export function relayStateAad(relayInstallationId: string): string {
+  return `jbm-relay-mls-state/v1:${relayInstallationId}`;
 }
 
 export interface RelayInstallationStoreContext {
@@ -70,6 +98,19 @@ export interface RelayInstallationStore {
   /** Live relay members of a conversation, whoever they serve. */
   readonly seatsForConversation: (conversationId: string) => Promise<RelaySeat[]>;
   readonly revoke: (relayInstallationId: string) => Promise<boolean>;
+  /** Every active relay with the account it serves. */
+  readonly listActive: () => Promise<
+    { relayInstallationId: string; servedAccountId: string; channelKind: string }[]
+  >;
+  /**
+   * Runs `mutate` against the relay's unsealed MLS state under FOR UPDATE
+   * of its row and reseals whatever state comes back - the only way relay
+   * state ever changes (0024: keeper drain and webhook serialize here).
+   */
+  readonly withState: <T>(
+    relayInstallationId: string,
+    mutate: (state: string, tx: TransactionSql) => Promise<{ state: string; result: T }>,
+  ) => Promise<T>;
 }
 
 export function createRelayInstallationStore(
@@ -143,9 +184,10 @@ export function createRelayInstallationStore(
             if (relay.mls_state_ciphertext === null) {
               throw new Error("Relay installation has no sealed MLS state.");
             }
-            const state = seal.openPayload(
+            const state = seal.openPayloadBound(
               Buffer.from(relay.mls_state_ciphertext as Uint8Array),
               String(relay.kms_key_version),
+              relayStateAad(relayInstallationId),
             );
             const generated = await bridge.generateKeyPackage(state);
             await insertKeyPackage(
@@ -155,7 +197,10 @@ export function createRelayInstallationStore(
               generated.keyPackage,
               now,
             );
-            const sealed = seal.sealPayload(generated.state);
+            const sealed = seal.sealPayloadBound(
+              generated.state,
+              relayStateAad(relayInstallationId),
+            );
             await tx`
               UPDATE relay_installations SET
                 mls_state_ciphertext = ${sealed.ciphertext},
@@ -221,7 +266,10 @@ export function createRelayInstallationStore(
           generated.keyPackage,
           now,
         );
-        const sealed = seal.sealPayload(generated.state);
+        const sealed = seal.sealPayloadBound(
+          generated.state,
+          relayStateAad(relayInstallationId),
+        );
         await tx`
           INSERT INTO relay_installations (
             relay_installation_id, served_account_id, channel_kind,
@@ -273,6 +321,55 @@ export function createRelayInstallationStore(
           role: String(row.role),
         }),
       );
+    },
+
+    async listActive() {
+      const rows = await sql`
+        SELECT relay_installation_id, served_account_id, channel_kind
+        FROM relay_installations WHERE state = 'active'
+        ORDER BY created_at`;
+      return rows.map((row) => ({
+        relayInstallationId: String(row.relay_installation_id),
+        servedAccountId: String(row.served_account_id),
+        channelKind: String(row.channel_kind),
+      }));
+    },
+
+    async withState<T>(
+      relayInstallationId: string,
+      mutate: (state: string, tx: TransactionSql) => Promise<{ state: string; result: T }>,
+    ): Promise<T> {
+      const outcome = await sql.begin(async (tx) => {
+        const now = await dbNow(tx);
+        const rows = await tx`
+          SELECT mls_state_ciphertext, kms_key_version FROM relay_installations
+          WHERE relay_installation_id = ${relayInstallationId}
+            AND state = 'active'
+          FOR UPDATE`;
+        if (rows.length !== 1 || rows[0].mls_state_ciphertext === null) {
+          throw new Error("Relay installation has no sealed MLS state.");
+        }
+        const state = seal.openPayloadBound(
+          Buffer.from(rows[0].mls_state_ciphertext as Uint8Array),
+          String(rows[0].kms_key_version),
+          relayStateAad(relayInstallationId),
+        );
+        const mutated = await mutate(state, tx);
+        if (mutated.state !== state) {
+          const sealed = seal.sealPayloadBound(
+            mutated.state,
+            relayStateAad(relayInstallationId),
+          );
+          await tx`
+            UPDATE relay_installations SET
+              mls_state_ciphertext = ${sealed.ciphertext},
+              kms_key_version = ${sealed.kmsKeyVersion},
+              updated_at = ${now}::timestamptz
+            WHERE relay_installation_id = ${relayInstallationId}`;
+        }
+        return { result: mutated.result };
+      });
+      return (outcome as { result: T }).result;
     },
 
     async revoke(relayInstallationId: string) {

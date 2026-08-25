@@ -383,3 +383,12 @@ human sign-off gate.
 - [x] wasm removeMember + mls.ts wrappers + conversation.ts enable/disableRelay + RelayPanel UI
 - [x] pgtests + lab (relay store suite, HTTP consent enable/disable); docs/ADR
 - [x] check green; commit 8d62578; app+keeper SUCCESS; prod at 25 migrations; mlsBridge ready; memory updated
+
+## Relay phases 3+4 + gap fixes (2026-08-25)
+- [x] cancelIntent requires a live member; AAD-bound relay state (sealPayloadBound)
+- [x] Migration 0026 (relay_forward_watermarks.mls_group_id/processed_position; notification_channels (kind,target) index)
+- [x] relayDrain.ts + POST /v1/internal/relay-drain + keeper tick loop
+- [x] Telegram webhook inbound → routeInbound → seal → appendForInstallation (append lane extracted below the session)
+- [x] Fixed: policyWitnessSync ORDER BY text alias (10 before 9 → equivocation); re-join resets membership window
+- [x] pgtest: drain forwards, replay-safe inbound append, stranger ignored, no echo; storage lab green
+- [ ] check; commit; deploy app+keeper; push

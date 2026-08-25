@@ -53,6 +53,14 @@ Operational facts learned during the first deploy:
   crypto/ changes - `npm run check` fails until the manifest matches.
   Verify after deploy: `POST /v1/internal/enrollment-status` (bearer
   JBM_INTERNAL_SYNC_TOKEN) → `mlsBridge.status === "ready"`.
+- Telegram (notifications AND the ADR 0006 relay) needs
+  `JBM_TELEGRAM_BOT_TOKEN`, `JBM_TELEGRAM_BOT_USERNAME` and
+  `JBM_TELEGRAM_WEBHOOK_SECRET` on the **app** service (the webhook must
+  be registered with Telegram's `setWebhook` pointing at
+  `https://fruitful.chat/v1/telegram/webhook` with the same secret). As of
+  2026-08-25 none of the three is set, so Telegram is inert in production.
+  The relay drain rides the keeper's internal-sync loop
+  (`/v1/internal/relay-drain`, same origin + token) - no keeper env change.
 - If deploys die repeatedly at "scheduling build on Metal builder", the
   assigned regional builder is stuck: move the service's region
   (GraphQL serviceInstanceUpdate multiRegionConfig) and redeploy.

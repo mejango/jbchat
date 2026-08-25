@@ -560,7 +560,18 @@ export function createMembershipIntentStore(
         ) {
           return Object.freeze({ status: "unknown" as const });
         }
-        void requestedByInstallationId;
+        // Only a live member of the conversation may cancel (ADR 0003: the
+        // committer set is derived from memberships; anyone who could
+        // refuse to commit may also withdraw the intent). Anyone else sees
+        // the same answer as for an unknown intent.
+        const requester = await tx`
+          SELECT 1 FROM memberships
+          WHERE conversation_id = ${String(rows[0].conversation_id)}
+            AND installation_id = ${requestedByInstallationId}
+            AND removed_at IS NULL`;
+        if (requester.length !== 1) {
+          return Object.freeze({ status: "unknown" as const });
+        }
         await tx`
           UPDATE membership_intents SET state = 'cancelled'
           WHERE intent_id = ${intentId}`;

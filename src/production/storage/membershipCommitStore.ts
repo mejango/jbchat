@@ -511,17 +511,45 @@ export function createMembershipCommitStore(
               UPDATE key_packages SET state = 'used',
                 used_at = ${now}::timestamptz
               WHERE taken_by_intent_id = ${input.intentId}`;
-            await tx`
-              INSERT INTO memberships (
-                conversation_id, installation_id, account_id, credential_id,
-                role, delivery_purpose, bootstrap_mode, joined_position,
-                joined_at
-              ) VALUES (
-                ${conversationId}, ${targetInstallationId},
-                ${targetAccountId}, ${input.targetCredentialId},
-                ${targetRole}, ${purpose}, 'welcome', ${position},
-                ${now}::timestamptz
-              )`;
+            // A member removed earlier may be added again (a relay seat
+            // re-enabled): its membership row keeps the PK, so the window
+            // resets in place and the stale Welcome (which references the
+            // old window) is retired first.
+            const rejoin = await tx`
+              SELECT 1 FROM memberships
+              WHERE conversation_id = ${conversationId}
+                AND installation_id = ${targetInstallationId}
+                AND removed_at IS NOT NULL`;
+            if (rejoin.length === 1) {
+              await tx`
+                DELETE FROM mls_welcomes
+                WHERE conversation_id = ${conversationId}
+                  AND target_installation_id = ${targetInstallationId}`;
+              await tx`
+                UPDATE memberships SET
+                  account_id = ${targetAccountId},
+                  credential_id = ${input.targetCredentialId},
+                  role = ${targetRole},
+                  bootstrap_mode = 'welcome',
+                  joined_position = ${position},
+                  joined_at = ${now}::timestamptz,
+                  removed_position = NULL,
+                  removed_at = NULL
+                WHERE conversation_id = ${conversationId}
+                  AND installation_id = ${targetInstallationId}`;
+            } else {
+              await tx`
+                INSERT INTO memberships (
+                  conversation_id, installation_id, account_id, credential_id,
+                  role, delivery_purpose, bootstrap_mode, joined_position,
+                  joined_at
+                ) VALUES (
+                  ${conversationId}, ${targetInstallationId},
+                  ${targetAccountId}, ${input.targetCredentialId},
+                  ${targetRole}, ${purpose}, 'welcome', ${position},
+                  ${now}::timestamptz
+                )`;
+            }
             const welcome = input.welcomeByInstallation[0].welcome;
             await tx`
               INSERT INTO mls_welcomes (

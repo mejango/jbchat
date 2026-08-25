@@ -82,6 +82,7 @@ describeStorage("messaging HTTP surface", () => {
   let pre: Record<string, unknown>;
   let authorityBefore: AppendAuthoritySnapshot;
   let witnessSql3: Sql | null = null;
+  const telegramSends: { chatId: string; text: string }[] = [];
   let core3: ReturnType<typeof createWitnessCore>;
   let handlers8453: ReturnType<typeof createMessagingHttpHandlers>;
   let customer: EnrolledDevice & { walletAddress: string };
@@ -832,9 +833,30 @@ describeStorage("messaging HTTP surface", () => {
           signerPublicKey: Buffer.from(signerPublic, "base64url"),
         },
         provisioningSeed: Buffer.alloc(32, 0x63),
-        notifications: null,
+        notifications: {
+          appOrigin: "https://fruitful.chat",
+          email: null,
+          telegram: {
+            botToken: "lab-bot-token",
+            botUsername: "fruitful_lab_bot",
+            webhookSecret: null,
+          },
+        },
       }),
       connect: () => sql,
+      fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url.includes("api.telegram.org")) {
+          const payload = JSON.parse(String(init?.body ?? "{}")) as {
+            chat_id: string;
+            text: string;
+          };
+          telegramSends.push({ chatId: String(payload.chat_id), text: payload.text });
+          return new Response(JSON.stringify({ ok: true }), { status: 200 });
+        }
+        return new Response("{}", { status: 404 });
+      },
+      projectName: async () => "Fruitful Lab",
       now: () => new Date(labClockMs).toISOString(),
       walletProofVerifier: createFictionalWalletProofVerifier({
         finalityProfileId: activeProfileId,
@@ -1840,12 +1862,191 @@ describeStorage("messaging HTTP surface", () => {
     }
   });
 
+  it("drains the relay's mailbox to Telegram and appends a Telegram reply", async () => {
+    const conversationId = activatedConversationId;
+    const relayPath = `/v1/conversations/${conversationId}/relay`;
+    telegramSends.length = 0;
+
+    // The customer's relay seat again (the previous test removed it).
+    const enabled = await handlers8453.enableConversationRelay(
+      authedRequest(customer, "POST", relayPath, { channelKind: "telegram" }),
+      conversationId,
+    );
+    if (enabled.status !== 201) {
+      throw new Error(`relay consent refused: ${await enabled.text()}`);
+    }
+    const composed = (await enabled.json()) as {
+      relayInstallationId: string;
+      intent: {
+        intentId: string;
+        baseEpoch: string;
+        baseRosterVersion: string;
+        proposedRosterHash: string;
+        targetCredentialId: string;
+      };
+      mandatoryProposals: unknown[];
+    };
+    const [before] = await sql`
+      SELECT confirmed_transcript_hash FROM conversations
+      WHERE conversation_id = ${conversationId}`;
+    const addCommit = Buffer.from("relay-add-commit-2", "utf8");
+    const committed = await handlers8453.consumeCommit(
+      authedRequest(customer, "POST", `/v1/conversations/${conversationId}/commits`, {
+        intentId: composed.intent.intentId,
+        expectedEpoch: composed.intent.baseEpoch,
+        expectedRosterVersion: composed.intent.baseRosterVersion,
+        proposedRosterHash: composed.intent.proposedRosterHash,
+        mandatoryProposals: composed.mandatoryProposals,
+        envelopeId: randomUUID(),
+        commit: addCommit.toString("base64url"),
+        envelopeSha256: createHash("sha256").update(addCommit).digest("base64url"),
+        baseConfirmedTranscriptHash: (
+          before.confirmed_transcript_hash as Buffer
+        ).toString("base64url"),
+        resultingConfirmedTranscriptHash: Buffer.alloc(32, 0xd3).toString("base64url"),
+        resultingEpoch: String(BigInt(composed.intent.baseEpoch) + 1n),
+        welcomeByInstallation: [
+          {
+            installationId: composed.relayInstallationId,
+            welcome: Buffer.from("relay-welcome-2", "utf8").toString("base64url"),
+          },
+        ],
+        targetCredentialId: composed.intent.targetCredentialId,
+      }),
+      conversationId,
+    );
+    if (committed.status !== 200) {
+      throw new Error(`relay add commit refused: ${await committed.text()}`);
+    }
+    const commitPosition = ((await committed.json()) as { position: string }).position;
+    expect(
+      (await runPolicyWitnessSync(sql, witnessPort(), { provisioningSeed: PROVISIONING_SEED }))
+        .blocked,
+    ).toBeNull();
+
+    // Outbound, pass 1: the relay joins its Welcome; nothing to forward yet
+    // (the Welcome's own Commit is already inside the joined state).
+    const drainRequest = () =>
+      new Request(`${BASE}/v1/internal/relay-drain`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${INTERNAL_SYNC_TOKEN}` },
+      });
+    const first = (await (await handlers8453.relayDrain(drainRequest())).json()) as {
+      relays: number;
+      joined: number;
+      commits: number;
+      forwarded: number;
+      skipped: string[];
+    };
+    expect(first.skipped).toEqual([]);
+    expect(first.joined).toBe(1);
+    expect(first.forwarded).toBe(0);
+    const [watermark] = await sql`
+      SELECT processed_position, forwarded_position, mls_group_id
+      FROM relay_forward_watermarks
+      WHERE relay_installation_id = ${composed.relayInstallationId}
+        AND conversation_id = ${conversationId}`;
+    expect(String(watermark.processed_position)).toBe(commitPosition);
+    expect(watermark.mls_group_id).not.toBeNull();
+
+    // A message from the project owner is forwarded with the relay format.
+    const sent = await sendVia(projectOwner, conversationId, "your order shipped");
+    if (sent.status !== 201) {
+      throw new Error(`owner append refused: ${JSON.stringify(sent.body)}`);
+    }
+    const second = (await (await handlers8453.relayDrain(drainRequest())).json()) as {
+      forwarded: number;
+      sendFailures: number;
+    };
+    expect(second.forwarded).toBe(1);
+    expect(second.sendFailures).toBe(0);
+    // Wake-up pings also ride Telegram; only relayed content carries a tag.
+    const relayed = telegramSends.filter((send) => send.text.startsWith("["));
+    expect(relayed).toHaveLength(1);
+    expect(relayed[0].chatId).toBe("777001");
+    expect(relayed[0].text).toBe(
+      `[${conversationId.replace(/-/g, "").slice(0, 4)}] Fruitful Lab — Team:\nyour order shipped`,
+    );
+    // Idempotent: a third pass forwards nothing new.
+    const third = (await (await handlers8453.relayDrain(drainRequest())).json()) as {
+      forwarded: number;
+    };
+    expect(third.forwarded).toBe(0);
+
+    // Inbound: the customer replies from Telegram; the relay seals and
+    // appends through the ordinary lane as itself.
+    const [beforeReply] = await sql`
+      SELECT last_position FROM conversations WHERE conversation_id = ${conversationId}`;
+    const webhook = (updateId: number, text: string) =>
+      handlers8453.telegramWebhook(
+        new Request(`${BASE}/v1/telegram/webhook`, {
+          method: "POST",
+          headers: { "Content-Type": MEDIA_TYPE },
+          body: JSON.stringify({
+            update_id: updateId,
+            message: { text, chat: { id: 777001 } },
+          }),
+        }),
+      );
+    expect((await webhook(9001, "thanks, got it")).status).toBe(200);
+    const [afterReply] = await sql`
+      SELECT last_position FROM conversations WHERE conversation_id = ${conversationId}`;
+    expect(BigInt(String(afterReply.last_position))).toBe(
+      BigInt(String(beforeReply.last_position)) + 1n,
+    );
+    const [replyEnvelope] = await sql`
+      SELECT sender_installation_id, envelope_class, encode(envelope_bytes, 'base64') AS bytes
+      FROM envelopes WHERE conversation_id = ${conversationId}
+      ORDER BY position DESC LIMIT 1`;
+    expect(String(replyEnvelope.sender_installation_id)).toBe(composed.relayInstallationId);
+    expect(String(replyEnvelope.envelope_class)).toBe("application");
+    // The fictional bridge seals as identity: the wire carries the text.
+    expect(Buffer.from(String(replyEnvelope.bytes), "base64").toString("utf8")).toBe(
+      "thanks, got it",
+    );
+    // Telegram retries the same update: replayed, never appended twice.
+    expect((await webhook(9001, "thanks, got it")).status).toBe(200);
+    const [afterReplay] = await sql`
+      SELECT last_position FROM conversations WHERE conversation_id = ${conversationId}`;
+    expect(String(afterReplay.last_position)).toBe(String(afterReply.last_position));
+    // A chat nobody verified is ignored, and /start never reaches the relay.
+    expect(
+      (
+        await handlers8453.telegramWebhook(
+          new Request(`${BASE}/v1/telegram/webhook`, {
+            method: "POST",
+            headers: { "Content-Type": MEDIA_TYPE },
+            body: JSON.stringify({
+              update_id: 9002,
+              message: { text: "hello?", chat: { id: 999999 } },
+            }),
+          }),
+        )
+      ).status,
+    ).toBe(200);
+    const [afterStranger] = await sql`
+      SELECT last_position FROM conversations WHERE conversation_id = ${conversationId}`;
+    expect(String(afterStranger.last_position)).toBe(String(afterReply.last_position));
+    // The relay's own reply is not echoed back to Telegram; the owner still reads.
+    const fourth = (await (await handlers8453.relayDrain(drainRequest())).json()) as {
+      forwarded: number;
+    };
+    expect(fourth.forwarded).toBe(0);
+    const ownerSend = await sendVia(projectOwner, conversationId, "anytime");
+    expect(ownerSend.status).toBe(201);
+  });
+
   it("renews an expiring policy head so appends outlive the five-minute window", async () => {
     const conversationId = activatedConversationId;
     const [anchorBefore] = await sql`
       SELECT policy_head_sequence, expires_at
       FROM delivery_policy_head_anchors
       WHERE conversation_id = ${conversationId}`;
+    const activeGrantsBefore = (
+      await sql`
+        SELECT 1 FROM conversation_send_grants
+        WHERE conversation_id = ${conversationId} AND state = 'active'`
+    ).length;
     const pastExpiry = new Date(
       Date.parse(new Date(anchorBefore.expires_at as Date).toISOString()) +
         60_000,
@@ -1877,6 +2078,8 @@ describeStorage("messaging HTTP surface", () => {
         },
         { provisioningSeed: PROVISIONING_SEED },
       );
+      // Two heads renewed in one pass means two pending checkpoints (9 and
+      // 10 here): they must be submitted in numeric tree-size order.
       expect(report.blocked).toBeNull();
       expect(report.renewed).toBeGreaterThanOrEqual(1);
       const [anchorAfter] = await sql`
@@ -1893,7 +2096,7 @@ describeStorage("messaging HTTP surface", () => {
       const grants = await sql`
         SELECT policy_head_sequence FROM conversation_send_grants
         WHERE conversation_id = ${conversationId} AND state = 'active'`;
-      expect(grants.length).toBe(3);
+      expect(grants.length).toBe(activeGrantsBefore);
       expect(
         grants.every(
           (grant) =>

@@ -91,6 +91,15 @@ import {
   type RelayInstallationStore,
 } from "../storage/relayInstallationStore";
 import { issueRelayGrant } from "../entitlement/eligibilityStore";
+import { runRelayDrain } from "../relay/relayDrain";
+import {
+  conversationTag,
+  renderPrompt,
+  routeInbound,
+  type RelayEnvelopeContext,
+} from "../relay/relayFormat";
+import { BendystrawDiscoveryAdapter } from "../../integrations/juicebox/discovery.server";
+import type { FetchLike } from "../notify/senders";
 import { readProjectProvision } from "../storage/appendAuthority";
 import { rotateExternalSenderCredentials } from "../storage/externalSenderRotation";
 import { readCallAtFinalized } from "../chain/quorumReads";
@@ -126,6 +135,19 @@ const CURSOR_TTL_MILLISECONDS = 24 * 60 * 60 * 1_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HANDLE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const NOT_CONFIGURED = Object.freeze({
+  status: "unavailable" as const,
+  reasonCode: "not-configured" as const,
+});
+
+/** A UUIDv4-shaped id from 16 digest bytes (the append lane wants v4). */
+function uuidV4From(digest: Buffer): string {
+  const bytes = Buffer.from(digest.subarray(0, 16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 export interface MessagingHttpContext {
   readonly loadConfig?: () => MessagingRuntimeConfig;
@@ -144,6 +166,10 @@ export interface MessagingHttpContext {
   readonly policyWitnessSubmit?: PolicyWitnessSubmitPort;
   /** Lab override for the relay provisioner's bridge verbs. */
   readonly mlsBridge?: RelayBridgePort | null;
+  /** Lab override for outbound channel HTTP (Telegram sendMessage). */
+  readonly fetchImpl?: FetchLike;
+  /** Lab override for the best-effort project display name. */
+  readonly projectName?: (chainId: string, projectId: string) => Promise<string | null>;
 }
 
 export interface MessagingHttpHandlers {
@@ -243,6 +269,8 @@ export interface MessagingHttpHandlers {
     request: Request,
     conversationId: string,
   ) => Promise<Response>;
+  /** Internal (keeper-triggered): ADR 0006 §4 outbound relay drain. */
+  readonly relayDrain: (request: Request) => Promise<Response>;
   readonly externalSenderRotation: (request: Request) => Promise<Response>;
   readonly rpcDiagnostics: (request: Request) => Promise<Response>;
   readonly enrollmentStatus: (request: Request) => Promise<Response>;
@@ -299,7 +327,9 @@ export function createMessagingHttpHandlers(
     readonly intents: MembershipIntentStore | null;
     readonly commits: MembershipCommitStore | null;
     readonly proposals: ExternalProposalStore | null;
-    readonly relays: RelayInstallationStore | null;
+    readonly relays: (RelayInstallationStore & { readonly bridge: RelayBridgePort }) | null;
+    readonly fetchImpl: FetchLike;
+    readonly projectName: (chainId: string, projectId: string) => Promise<string | null>;
     readonly cursorCodec: ReturnType<
       typeof createKeyedConversationCursorCodec
     > | null;
@@ -398,9 +428,14 @@ export function createMessagingHttpHandlers(
             ? environmentRelayBridge()
             : contextValue.mlsBridge;
         return bridge
-          ? createRelayInstallationStore({ sql, bridge, seal: crypto })
+          ? Object.freeze({
+              ...createRelayInstallationStore({ sql, bridge, seal: crypto }),
+              bridge,
+            })
           : null;
       })(),
+      fetchImpl: contextValue.fetchImpl ?? globalThis.fetch,
+      projectName: contextValue.projectName ?? bendystrawProjectName,
       cursorCodec: config.cursor
         ? createKeyedConversationCursorCodec({
             keyId: config.cursor.keyId,
@@ -498,7 +533,11 @@ export function createMessagingHttpHandlers(
       }),
       notificationsConfig: config.notifications,
       dispatcher: config.notifications
-        ? createNotificationDispatcher({ sql, config: config.notifications })
+        ? createNotificationDispatcher({
+            sql,
+            config: config.notifications,
+            fetchImpl: contextValue.fetchImpl,
+          })
         : null,
     };
     return cached;
@@ -657,6 +696,282 @@ export function createMessagingHttpHandlers(
       })),
       statement: RELAY_CONFIDENTIALITY_STATEMENT,
     });
+  }
+
+  /**
+   * The append lane below the session: the same ports, service and
+   * request commitment for a member's device (appendEnvelope) and for a
+   * relay appending in-process (the Telegram webhook, ADR 0006 §5) - send
+   * grant, custody fence, quotas and the witness gate are all enforced by
+   * the delivery core, so a relay has no bypass surface.
+   */
+  async function appendForInstallation(
+    wired: Wired,
+    input: {
+      conversationId: string;
+      installationId: string;
+      accountId: string;
+      credential: Record<string, unknown>;
+      idempotencyKey: string;
+      ifMatch: string;
+      rawText: string;
+    },
+  ): Promise<
+    | { status: "log_key_unavailable" }
+    | { status: "accepted" | "conflict" | "rejected" | "unavailable"; [key: string]: unknown }
+  > {
+    const { conversationId } = input;
+    const keys = wired.appendKeys!;
+    const validity = await wired.sql`
+      SELECT valid_from, valid_until FROM delivery_log_signing_keys
+      WHERE key_id = ${keys.keyId} AND state = 'active'`;
+    if (validity.length !== 1) return { status: "log_key_unavailable" };
+    const ports = {
+      ...createKeyedDeliveryCryptoPorts({
+        now: (() => now()) as never,
+        snapshot: () =>
+          wired.deliveryStore.loadSnapshot(conversationId as never, {
+            installationId: input.installationId,
+          }),
+        signingKeyId: keys.keyId as never,
+        signingKeyValidFrom: new Date(
+          validity[0].valid_from as Date,
+        ).toISOString() as never,
+        signingKeyValidUntil: new Date(
+          validity[0].valid_until as Date,
+        ).toISOString() as never,
+        privateKey: keys.privateKey,
+        publicKey: keys.publicKey,
+      }),
+      mlsCommitProjectionVerifier: { verify: () => Promise.resolve(NOT_CONFIGURED) },
+      mlsExternalProposalVerifier: { verify: () => Promise.resolve(NOT_CONFIGURED) },
+      conversationPolicyReplayVerifier: { verify: () => Promise.resolve(NOT_CONFIGURED) },
+      conversationPageProofVerifier: { verify: () => Promise.resolve(NOT_CONFIGURED) },
+      conversationLogHeadProofVerifier: { verify: () => Promise.resolve(NOT_CONFIGURED) },
+      applicationAppendPreflight: wired.deliveryStore.applicationAppendPreflight,
+      atomicPersistence: wired.deliveryStore.atomicPersistence,
+      clock: { now: (() => now()) as never },
+      conversationCursorCodec: wired.cursorCodec ?? {
+        decode: () => Promise.resolve(NOT_CONFIGURED),
+        encode: () => Promise.resolve(NOT_CONFIGURED),
+      },
+      invariantIncident: {
+        record: (incident: unknown) => {
+          console.error("DELIVERY INVARIANT INCIDENT", incident);
+          return Promise.resolve({ status: "recorded" });
+        },
+      },
+    };
+    const trust = wired.trust!;
+    const service = createApplicationEnvelopeDeliveryService(ports as never, {
+      realmId: trust.realmId,
+      releaseProfileId: trust.releaseProfileId,
+      releaseTrustRootDigest: trust.releaseTrustRootDigest,
+      deliveryLimitsDigest: trust.deliveryLimitsDigest,
+      deliveryLimits: trust.deliveryLimits,
+    });
+    const result = await service.appendApplicationEnvelope({
+      idempotencyKey: input.idempotencyKey,
+      authenticatedSender: {
+        type: "installation",
+        accountId: input.accountId,
+        installationId: input.installationId,
+      },
+      authenticatedCredentialId: String(input.credential.role_credential_id),
+      authenticatedCredentialFingerprint: Buffer.from(
+        String(input.credential.fingerprint).replace(/\s/g, ""),
+        "base64",
+      ).toString("base64url"),
+      authenticatedCredentialRevocationVersion: String(
+        input.credential.revocation_version,
+      ),
+      request: {
+        method: "POST",
+        routeTemplate: APPLICATION_ENVELOPE_APPEND_ROUTE,
+        resourceId: conversationId,
+        mediaType: API_V1_MEDIA_TYPE,
+        ifMatch: input.ifMatch,
+        rawBodyBytes: Buffer.from(input.rawText, "utf8"),
+        queryString: "",
+        contentEncoding: null,
+      },
+    } as never);
+    return result as never;
+  }
+
+  /** The active send grant + role credential the append lane binds. */
+  async function sendGrantFor(
+    wired: Wired,
+    conversationId: string,
+    installationId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const grants = await wired.sql`
+      SELECT g.credential_id, g.role_credential_id,
+             encode(rc.credential_fingerprint, 'base64') AS fingerprint,
+             rc.revocation_version
+      FROM conversation_send_grants g
+      JOIN role_credentials rc ON rc.credential_id = g.role_credential_id
+      WHERE g.conversation_id = ${conversationId}
+        AND g.installation_id = ${installationId}
+        AND g.state = 'active'`;
+    return grants.length === 1 ? grants[0] : null;
+  }
+
+  /**
+   * ADR 0006 §5, the inbound path: a Telegram message from a verified chat
+   * maps to the accounts that verified it, to their active relays, to the
+   * conversations those relays are seated in; routeInbound picks one (or
+   * asks), the relay seals under its row lock and appends through the
+   * ordinary lane. Nothing is ever guessed; every refusal is a channel
+   * reply, never a silent drop.
+   */
+  async function relayInbound(
+    wired: Wired,
+    cfg: { botToken: string },
+    update: { updateId: string; chatId: string; text: string },
+  ): Promise<void> {
+    if (!wired.relays || !wired.appendKeys || !wired.trust) return;
+    const accounts = await wired.notifications.accountsForTarget(
+      "telegram",
+      update.chatId,
+    );
+    const reply = (text: string) =>
+      sendTelegramReply(cfg.botToken, update.chatId, text, wired.fetchImpl);
+    const candidates: {
+      relayInstallationId: string;
+      relayAccountId: string;
+      conversationId: string;
+      groupId: string;
+      context: RelayEnvelopeContext;
+    }[] = [];
+    for (const accountId of accounts) {
+      const relay = await wired.relays.activeFor(accountId, "telegram");
+      if (!relay) continue;
+      const seats = await wired.sql`
+        SELECT f.conversation_id, encode(f.mls_group_id, 'base64') AS group_id,
+               m.role, p.chain_id, p.project_id::text AS project_id
+        FROM relay_forward_watermarks f
+        JOIN memberships m
+          ON m.conversation_id = f.conversation_id
+         AND m.installation_id = f.relay_installation_id
+         AND m.removed_at IS NULL
+        JOIN conversations c ON c.conversation_id = f.conversation_id
+        JOIN project_refs p ON p.project_ref_id = c.project_ref_id
+        WHERE f.relay_installation_id = ${relay.relayInstallationId}
+          AND f.mls_group_id IS NOT NULL
+          AND c.state = 'active'
+        ORDER BY f.updated_at DESC`;
+      for (const seat of seats) {
+        const conversationId = String(seat.conversation_id);
+        candidates.push({
+          relayInstallationId: relay.relayInstallationId,
+          relayAccountId: relay.relayAccountId,
+          conversationId,
+          groupId: Buffer.from(
+            String(seat.group_id).replace(/\s/g, ""),
+            "base64",
+          ).toString("base64url"),
+          context: {
+            projectName: await wired.projectName(
+              String(seat.chain_id),
+              String(seat.project_id),
+            ),
+            projectId: String(seat.project_id),
+            senderRole: String(seat.role),
+            tag: conversationTag(conversationId),
+          },
+        });
+      }
+    }
+    const route = routeInbound(
+      update.text,
+      candidates.map((candidate) => ({
+        conversationId: candidate.conversationId,
+        context: candidate.context,
+      })),
+    );
+    if (route.kind === "ignore") return;
+    if (route.kind === "prompt") {
+      await reply(renderPrompt(route.options));
+      return;
+    }
+    const chosen = candidates.find(
+      (candidate) => candidate.conversationId === route.conversationId,
+    )!;
+    const credential = await sendGrantFor(
+      wired,
+      chosen.conversationId,
+      chosen.relayInstallationId,
+    );
+    if (!credential) {
+      await reply("This relay can't send here right now. Open the app to reply.");
+      return;
+    }
+    const detail = await wired.sql`
+      SELECT c.etag, c.epoch, c.roster_version,
+             encode(c.confirmed_transcript_hash, 'base64') AS transcript,
+             a.policy_head_id, a.policy_head_sequence,
+             encode(a.policy_head_hash, 'base64') AS policy_head_hash,
+             a.witness_state
+      FROM conversations c
+      LEFT JOIN delivery_policy_head_anchors a ON a.conversation_id = c.conversation_id
+      WHERE c.conversation_id = ${chosen.conversationId}`;
+    const row = detail[0];
+    if (!row || row.policy_head_id === null || String(row.witness_state) !== "verified") {
+      await reply("The conversation is being co-signed right now. Try again in a moment.");
+      return;
+    }
+    const b64u = (value: unknown) =>
+      Buffer.from(String(value).replace(/\s/g, ""), "base64").toString("base64url");
+    // Seal under the relay's row lock; the mutated state is resealed there.
+    const message = await wired.relays.withState(
+      chosen.relayInstallationId,
+      async (state) => {
+        const sealed = await wired.relays!.bridge.sealApplication(
+          state,
+          chosen.groupId,
+          new TextEncoder().encode(route.text),
+        );
+        return { state: sealed.state, result: sealed.message };
+      },
+    );
+    const ciphertext = Buffer.from(message, "base64url");
+    // One Telegram update is one append: retries replay, edits conflict.
+    const updateDigest = createHash("sha256")
+      .update(`telegram:${update.updateId}`)
+      .digest();
+    const envelopeId = uuidV4From(updateDigest);
+    const body = JSON.stringify({
+      envelopeId,
+      policyHeadId: String(row.policy_head_id),
+      policyHeadSequence: String(row.policy_head_sequence),
+      policyHeadHash: b64u(row.policy_head_hash),
+      expectedEpoch: String(row.epoch),
+      expectedRosterVersion: String(row.roster_version),
+      expectedConfirmedTranscriptHash: b64u(row.transcript),
+      contentType: "application/vnd.juicebox.messaging.mls-private-message",
+      ciphertext: ciphertext.toString("base64url"),
+      envelopeSha256: createHash("sha256").update(ciphertext).digest("base64url"),
+      attachmentIds: [],
+    });
+    const result = await appendForInstallation(wired, {
+      conversationId: chosen.conversationId,
+      installationId: chosen.relayInstallationId,
+      accountId: chosen.relayAccountId,
+      credential,
+      idempotencyKey: updateDigest.toString("base64url"),
+      ifMatch: String(row.etag),
+      rawText: body,
+    });
+    if (result.status === "accepted") {
+      if (wired.dispatcher) {
+        void notifyConversationPeers(wired, chosen.conversationId, chosen.relayAccountId)
+          .catch(() => undefined);
+      }
+      return;
+    }
+    console.error("relay inbound append refused", result);
+    await reply("Your reply couldn't be delivered. Open the app to send it.");
   }
 
   const authenticate = async (
@@ -1571,6 +1886,25 @@ export function createMessagingHttpHandlers(
       const chatId = chat?.id;
       const match =
         typeof text === "string" ? text.match(/^\/start\s+(\S+)/) : null;
+      const updateId = (body as Record<string, unknown>).update_id;
+      if (
+        !match &&
+        typeof text === "string" &&
+        (typeof chatId === "number" || typeof chatId === "string") &&
+        (typeof updateId === "number" || typeof updateId === "string")
+      ) {
+        // ADR 0006 §5: a relayed reply. Errors are logged, never leaked to
+        // Telegram as a non-200 (it would retry forever).
+        try {
+          await relayInbound(wired, cfg, {
+            updateId: String(updateId),
+            chatId: String(chatId),
+            text,
+          });
+        } catch (error) {
+          console.error("relay inbound failed", String(error));
+        }
+      }
       if (match && (typeof chatId === "number" || typeof chatId === "string")) {
         const redeemed = await wired.notifications.redeemTelegramToken({
           token: match[1],
@@ -1883,125 +2217,18 @@ export function createMessagingHttpHandlers(
           AND g.state = 'active'`;
       if (grants.length !== 1) return problem(403, "no_send_grant");
 
-      const keys = wired.appendKeys;
-      const validity = await wired.sql`
-        SELECT valid_from, valid_until FROM delivery_log_signing_keys
-        WHERE key_id = ${keys.keyId} AND state = 'active'`;
-      if (validity.length !== 1) return problem(503, "log_key_unavailable");
-
-      const nowIso = now();
-      const ports = {
-        ...createKeyedDeliveryCryptoPorts({
-          now: (() => now()) as never,
-          snapshot: () =>
-            wired.deliveryStore.loadSnapshot(conversationId as never, {
-              installationId: session.installationId,
-            }),
-          signingKeyId: keys.keyId as never,
-          signingKeyValidFrom: new Date(
-            validity[0].valid_from as Date,
-          ).toISOString() as never,
-          signingKeyValidUntil: new Date(
-            validity[0].valid_until as Date,
-          ).toISOString() as never,
-          privateKey: keys.privateKey,
-          publicKey: keys.publicKey,
-        }),
-        mlsCommitProjectionVerifier: {
-          verify: () =>
-            Promise.resolve({
-              status: "unavailable",
-              reasonCode: "not-configured",
-            }),
-        },
-        mlsExternalProposalVerifier: {
-          verify: () =>
-            Promise.resolve({
-              status: "unavailable",
-              reasonCode: "not-configured",
-            }),
-        },
-        conversationPolicyReplayVerifier: {
-          verify: () =>
-            Promise.resolve({
-              status: "unavailable",
-              reasonCode: "not-configured",
-            }),
-        },
-        conversationPageProofVerifier: {
-          verify: () =>
-            Promise.resolve({
-              status: "unavailable",
-              reasonCode: "not-configured",
-            }),
-        },
-        conversationLogHeadProofVerifier: {
-          verify: () =>
-            Promise.resolve({
-              status: "unavailable",
-              reasonCode: "not-configured",
-            }),
-        },
-        applicationAppendPreflight:
-          wired.deliveryStore.applicationAppendPreflight,
-        atomicPersistence: wired.deliveryStore.atomicPersistence,
-        clock: { now: (() => now()) as never },
-        conversationCursorCodec: wired.cursorCodec ?? {
-          decode: () =>
-            Promise.resolve({
-              status: "unavailable",
-              reasonCode: "not-configured",
-            }),
-          encode: () =>
-            Promise.resolve({
-              status: "unavailable",
-              reasonCode: "not-configured",
-            }),
-        },
-        invariantIncident: {
-          record: (incident: unknown) => {
-            console.error("DELIVERY INVARIANT INCIDENT", incident);
-            return Promise.resolve({ status: "recorded" });
-          },
-        },
-      };
-      const service = createApplicationEnvelopeDeliveryService(
-        ports as never,
-        {
-          realmId: wired.trust.realmId,
-          releaseProfileId: wired.trust.releaseProfileId,
-          releaseTrustRootDigest: wired.trust.releaseTrustRootDigest,
-          deliveryLimitsDigest: wired.trust.deliveryLimitsDigest,
-          deliveryLimits: wired.trust.deliveryLimits,
-        },
-      );
-      void nowIso;
-      const result = await service.appendApplicationEnvelope({
+      const result = await appendForInstallation(wired, {
+        conversationId,
+        installationId: session.installationId,
+        accountId: session.accountId,
+        credential: grants[0],
         idempotencyKey,
-        authenticatedSender: {
-          type: "installation",
-          accountId: session.accountId,
-          installationId: session.installationId,
-        },
-        authenticatedCredentialId: String(grants[0].role_credential_id),
-        authenticatedCredentialFingerprint: Buffer.from(
-          String(grants[0].fingerprint).replace(/\s/g, ""),
-          "base64",
-        ).toString("base64url"),
-        authenticatedCredentialRevocationVersion: String(
-          grants[0].revocation_version,
-        ),
-        request: {
-          method: "POST",
-          routeTemplate: APPLICATION_ENVELOPE_APPEND_ROUTE,
-          resourceId: conversationId,
-          mediaType: API_V1_MEDIA_TYPE,
-          ifMatch,
-          rawBodyBytes: Buffer.from(rawText, "utf8"),
-          queryString: "",
-          contentEncoding: null,
-        },
-      } as never);
+        ifMatch,
+        rawText,
+      });
+      if (result.status === "log_key_unavailable") {
+        return problem(503, "log_key_unavailable");
+      }
       if (result.status === "accepted") {
         // Wake the other participants out-of-band (content stays E2E).
         if (wired.dispatcher) {
@@ -2293,6 +2520,31 @@ export function createMessagingHttpHandlers(
         grantId: null,
         projectRefId: membership.projectRefId,
       });
+    },
+
+    async relayDrain(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.internalSyncToken) return notFound();
+      const authorization = request.headers.get("authorization");
+      if (authorization !== `Bearer ${wired.internalSyncToken}`) {
+        return problem(401, "unauthorized");
+      }
+      if (!wired.relays) return problem(503, "bridge_unavailable");
+      const telegram = wired.notificationsConfig?.telegram ?? null;
+      const relays = wired.relays;
+      const report = await runRelayDrain({
+        sql: wired.sql,
+        relays,
+        bridge: relays.bridge,
+        activeTargets: (accountId) => wired.notifications.activeTargets(accountId),
+        sendText: async (channelKind, target, text) => {
+          if (channelKind !== "telegram" || !telegram) return false;
+          return sendTelegram(telegram.botToken, { chatId: target, text }, wired.fetchImpl);
+        },
+        projectName: wired.projectName,
+      });
+      return jsonNoStore(200, report);
     },
 
     async enrollmentStatus(request: Request): Promise<Response> {
@@ -2723,6 +2975,14 @@ function environmentRelayBridge(): RelayBridgePort | null {
       withBridge((client) => client.createIdentity(label)),
     generateKeyPackage: (state: string) =>
       withBridge((client) => client.generateKeyPackage(state)),
+    joinWelcome: (state: string, welcome: string) =>
+      withBridge((client) => client.joinWelcome(state, welcome)),
+    sealApplication: (state: string, groupId: string, plaintext: Uint8Array) =>
+      withBridge((client) => client.sealApplication(state, groupId, plaintext)),
+    openApplication: (state: string, groupId: string, message: string) =>
+      withBridge((client) => client.openApplication(state, groupId, message)),
+    processCommit: (state: string, groupId: string, commit: string) =>
+      withBridge((client) => client.processCommit(state, groupId, commit)),
   });
 }
 
@@ -2819,8 +3079,33 @@ async function sendTelegramReply(
   botToken: string,
   chatId: string,
   text: string,
+  fetchImpl: FetchLike = globalThis.fetch,
 ): Promise<void> {
-  await sendTelegram(botToken, { chatId, text });
+  await sendTelegram(botToken, { chatId, text }, fetchImpl);
+}
+
+// Best-effort display name from Bendystraw; the relay copy falls back to
+// "Project #id" when the lookup fails or the project has no name.
+const projectNameCache = new Map<string, { name: string | null; at: number }>();
+async function bendystrawProjectName(
+  chainId: string,
+  projectId: string,
+): Promise<string | null> {
+  const chainNumber = Number(chainId.replace(/^eip155:/, ""));
+  if (!Number.isSafeInteger(chainNumber) || !/^[0-9]+$/.test(projectId)) return null;
+  const key = `${chainNumber}:${projectId}`;
+  const cached = projectNameCache.get(key);
+  if (cached && Date.now() - cached.at < 5 * 60_000) return cached.name;
+  try {
+    const meta = await new BendystrawDiscoveryAdapter().projectMeta([
+      { chainId: chainNumber, projectId: Number(projectId) },
+    ]);
+    const name = meta[key]?.name ?? null;
+    projectNameCache.set(key, { name, at: Date.now() });
+    return name;
+  } catch {
+    return null;
+  }
 }
 
 function externalRequestUrl(request: Request): string {

@@ -21,6 +21,16 @@ export interface IdentityKeyedCryptoPort {
     readonly kmsKeyVersion: string;
   };
   readonly openPayload: (ciphertext: Buffer, kmsKeyVersion: string) => string;
+  /** AES-GCM with the row identity as associated data: a blob moved to another row fails to open. */
+  readonly sealPayloadBound: (
+    plaintext: string,
+    associatedData: string,
+  ) => { readonly ciphertext: Buffer; readonly kmsKeyVersion: string };
+  readonly openPayloadBound: (
+    ciphertext: Buffer,
+    kmsKeyVersion: string,
+    associatedData: string,
+  ) => string;
 }
 
 const WALLET_REF_DOMAIN = "jbm-identity-wallet-ref-lookup/v1";
@@ -47,7 +57,40 @@ export function createKeyedIdentityCrypto(
       .update(value)
       .digest();
   const sealKey = createHmac("sha256", secret).update(SEAL_KEY_DOMAIN).digest();
+  const seal = (plaintext: string, associatedData: string | null) => {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", sealKey, iv);
+    if (associatedData !== null) cipher.setAAD(Buffer.from(associatedData, "utf8"));
+    const sealed = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+    return {
+      ciphertext: Buffer.concat([iv, cipher.getAuthTag(), sealed]),
+      kmsKeyVersion: "keyed-lab-v1",
+    };
+  };
+  const open = (
+    ciphertext: Buffer,
+    kmsKeyVersion: string,
+    associatedData: string | null,
+  ) => {
+    if (kmsKeyVersion !== "keyed-lab-v1") {
+      throw new TypeError("Identity payload key version is unknown.");
+    }
+    const iv = ciphertext.subarray(0, 12);
+    const tag = ciphertext.subarray(12, 28);
+    const sealed = ciphertext.subarray(28);
+    const decipher = createDecipheriv("aes-256-gcm", sealKey, iv);
+    if (associatedData !== null) decipher.setAAD(Buffer.from(associatedData, "utf8"));
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(sealed), decipher.final()]).toString("utf8");
+  };
   return Object.freeze({
+    sealPayloadBound: (plaintext: string, associatedData: string) =>
+      seal(plaintext, associatedData),
+    openPayloadBound: (
+      ciphertext: Buffer,
+      kmsKeyVersion: string,
+      associatedData: string,
+    ) => open(ciphertext, kmsKeyVersion, associatedData),
     hmacWalletRefLookup: (caip10: string) => keyed(WALLET_REF_DOMAIN, caip10),
     hmacResultHandle: (handle: string) => keyed(RESULT_HANDLE_DOMAIN, handle),
     hmacChallengeNonce: (nonce: string) => keyed(CHALLENGE_NONCE_DOMAIN, nonce),
@@ -59,30 +102,8 @@ export function createKeyedIdentityCrypto(
       keyed(ELIGIBILITY_SUBJECT_DOMAIN, caip10),
     hmacRelaySubject: (servedAccountId: string, channelKind: string) =>
       keyed(ELIGIBILITY_RELAY_SUBJECT_DOMAIN, `${servedAccountId}\n${channelKind}`),
-    sealPayload: (plaintext: string) => {
-      const iv = randomBytes(12);
-      const cipher = createCipheriv("aes-256-gcm", sealKey, iv);
-      const sealed = Buffer.concat([
-        cipher.update(plaintext, "utf8"),
-        cipher.final(),
-      ]);
-      return {
-        ciphertext: Buffer.concat([iv, cipher.getAuthTag(), sealed]),
-        kmsKeyVersion: "keyed-lab-v1",
-      };
-    },
-    openPayload: (ciphertext: Buffer, kmsKeyVersion: string) => {
-      if (kmsKeyVersion !== "keyed-lab-v1") {
-        throw new TypeError("Identity payload key version is unknown.");
-      }
-      const iv = ciphertext.subarray(0, 12);
-      const tag = ciphertext.subarray(12, 28);
-      const sealed = ciphertext.subarray(28);
-      const decipher = createDecipheriv("aes-256-gcm", sealKey, iv);
-      decipher.setAuthTag(tag);
-      return Buffer.concat([decipher.update(sealed), decipher.final()]).toString(
-        "utf8",
-      );
-    },
+    sealPayload: (plaintext: string) => seal(plaintext, null),
+    openPayload: (ciphertext: Buffer, kmsKeyVersion: string) =>
+      open(ciphertext, kmsKeyVersion, null),
   });
 }

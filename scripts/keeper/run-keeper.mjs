@@ -91,4 +91,39 @@ if (process.env.JBM_INTERNAL_SYNC_URL && process.env.JBM_INTERNAL_SYNC_TOKEN) {
     }
   };
   void rotationLoop();
+
+  // ADR 0006 §4: the relay drain runs in the app (it holds the bridge and
+  // the channel credentials); the keeper only ticks it, like the witness
+  // sync. Every 15 s: join pending Welcomes, fold Commits, forward new
+  // messages to each relayed member's channel.
+  const drainUrl = new URL(process.env.JBM_INTERNAL_SYNC_URL);
+  drainUrl.pathname = "/v1/internal/relay-drain";
+  const drainLoop = async () => {
+    for (;;) {
+      try {
+        const response = await fetch(drainUrl, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.JBM_INTERNAL_SYNC_TOKEN}`,
+          },
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (response.status !== 200 && response.status !== 503) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        if (response.status === 200) {
+          const report = await response.json();
+          if (report.joined || report.forwarded || report.sendFailures || report.skipped?.length) {
+            console.log(
+              `Relay drain: ${report.joined} joined, ${report.forwarded} forwarded, ${report.sendFailures} send failures, ${report.skipped?.length ?? 0} skipped.`,
+            );
+          }
+        }
+      } catch (error) {
+        console.error("Relay drain trigger failed:", String(error));
+      }
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+    }
+  };
+  void drainLoop();
 }

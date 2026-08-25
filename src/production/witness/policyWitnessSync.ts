@@ -50,6 +50,8 @@ export async function runPolicyWitnessSync(
         })
       ).renewed
     : 0;
+  // The alias is text; ORDER BY must name the bigint column or ten sorts
+  // before nine and the witness sees a fork.
   const pending = await sql`
     SELECT checkpoint_id, tree_size::text AS tree_size,
            encode(root_hash, 'base64') AS root_hash, previous_checkpoint_id,
@@ -57,7 +59,7 @@ export async function runPolicyWitnessSync(
     FROM policy_log_checkpoints
     WHERE signer_key_id = 'jbm-policy-log-2026q3'
       AND witness_key_id = 'jbm-witness-pending'
-    ORDER BY tree_size
+    ORDER BY policy_log_checkpoints.tree_size
     LIMIT 100`;
   let witnessed = 0;
   let headsVerified = 0;

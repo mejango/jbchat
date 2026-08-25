@@ -144,14 +144,31 @@ is never added by default.
    only the served member may compose its Add/Remove (`relay-not-yours`).
    Conversation detail carries `relay.seats` for every member plus the
    §3 statement; the `RelayPanel` shows it verbatim.
-3. **Outbound:** keeper drain (env-gated child, `send-push-wakeups`
-   pattern) — mailbox entries for relay installations → FOR UPDATE on
-   the sealed state row → `client/open-application` → channel send with
-   the relayFormat rendering + `relay_forward_watermarks`.
-4. **Inbound:** Telegram webhook reply path — chat id → verified
-   channel → relay → `routeInbound` (tag / single / prompt) →
-   `client/seal-application` → the ORDINARY append lane under the
-   relay's send grant.
+3. **Outbound - SHIPPED.** The drain runs in the app (it holds the
+   pinned bridge and the channel credentials); the keeper ticks
+   `POST /v1/internal/relay-drain` every 15 s exactly like the witness
+   sync. Per active relay, under `FOR UPDATE` of its row
+   (`relayInstallationStore.withState`): join every Welcome addressed to
+   it (`mls_welcomes` → `client/join-welcome`; the group id and the
+   processed position land in `relay_forward_watermarks`, migration
+   0026), then fold every envelope after the processed position - Commits
+   via `client/process-commit`, application messages via
+   `client/open-application` → `renderOutbound` → Telegram `sendMessage`
+   to the served member's verified chat - and advance the watermarks. The
+   relay's own appends are never echoed. A failed channel send after the
+   message was opened is logged and counted (MLS has ratcheted; the
+   plaintext is never persisted; the app still has the message).
+4. **Inbound - SHIPPED.** The Telegram webhook maps `chat.id` →
+   verified `notification_channels` (index in 0026) → the account's
+   active relay → the conversations that relay is seated in;
+   `routeInbound` picks one by tag or uniqueness, or replies with
+   `renderPrompt` - never a guess. The relay seals under its row lock
+   (`client/seal-application`) and appends through `appendForInstallation`
+   - the SAME service, ports and request commitment the member's device
+   uses below the DPoP session, so send grant, custody fence, quotas and
+   the witness gate apply unchanged. `Idempotency-Key` and the envelope id
+   derive from Telegram's `update_id`: a retried update replays, an edited
+   one conflicts. Refusals are channel replies; the webhook always acks 200.
 5. Email (Resend inbound) and WhatsApp (provider TBD) reuse 0–4.
 6. **Bridge shipping to Railway - SHIPPED.** The bridge ships vendored,
    exactly as ADR 0004 intended: `npm run mls:bridge:build` builds
