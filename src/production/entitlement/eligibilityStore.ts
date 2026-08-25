@@ -61,8 +61,33 @@ export type GrantReadResult =
     }
   | { readonly status: "unknown" };
 
+export type RelayGrantIssueResult =
+  | {
+      readonly status: "issued";
+      readonly grantId: string;
+      readonly claimHandle: string;
+      readonly capability: "channel-relay";
+      readonly issuedAt: string;
+      readonly validUntil: string;
+    }
+  | { readonly status: "refused"; readonly reasonCode: string };
+
+export interface RelayGrantInput {
+  readonly projectRefId: string;
+  readonly relayAccountId: string;
+  readonly relayInstallationId: string;
+  readonly servedAccountId: string;
+  readonly channelKind: string;
+}
+
 export interface EligibilityStore {
   readonly issuePurchaseGrant: (input: unknown) => Promise<PurchaseGrantIssueResult>;
+  /**
+   * ADR 0006 consent grant: a channel-relay lease bound to the relay's
+   * service account, minted only under the served member's session (the
+   * HTTP layer proves that); it carries no finality anchor by design.
+   */
+  readonly issueRelayGrant: (input: RelayGrantInput) => Promise<RelayGrantIssueResult>;
   readonly readGrantByClaimHandle: (handle: unknown) => Promise<GrantReadResult>;
   readonly suspendGrantsForFinalityLoss: (chainId: string) => Promise<number>;
   readonly revokeGrantsForOrphanedAnchor: (
@@ -342,6 +367,10 @@ export function createEligibilityStore(
       });
     },
 
+    async issueRelayGrant(input: RelayGrantInput): Promise<RelayGrantIssueResult> {
+      return issueRelayGrant(sql, crypto, input, nowIso());
+    },
+
     async readGrantByClaimHandle(handleValue: unknown): Promise<GrantReadResult> {
       if (typeof handleValue !== "string" || !HANDLE_PATTERN.test(handleValue)) {
         return Object.freeze({ status: "unknown" });
@@ -384,6 +413,77 @@ export function createEligibilityStore(
   });
 }
 
+/**
+ * ADR 0006 consent grant, callable without the purchase lane (no manifest,
+ * no chain): the HTTP layer proves the served member's session before
+ * calling; the row binds the relay's service account and carries no
+ * finality anchor (migration 0025).
+ */
+export async function issueRelayGrant(
+sql: Sql,
+crypto: IdentityKeyedCryptoPort,
+input: RelayGrantInput,
+now: string,
+): Promise<RelayGrantIssueResult> {
+    return sql.begin(async (tx) => {
+      const policies = await tx`
+        SELECT policy_id, policy_revision, policy_hash FROM policies
+        WHERE project_ref_id = ${input.projectRefId}
+          AND superseded_at IS NULL
+        ORDER BY policy_revision DESC LIMIT 1 FOR SHARE`;
+      if (policies.length !== 1) {
+        return Object.freeze({
+          status: "refused" as const,
+          reasonCode: "project-policy-unavailable",
+        });
+      }
+      const relay = await tx`
+        SELECT 1 FROM relay_installations r
+        JOIN installations i ON i.installation_id = r.relay_installation_id
+        WHERE r.relay_installation_id = ${input.relayInstallationId}
+          AND r.served_account_id = ${input.servedAccountId}
+          AND r.channel_kind = ${input.channelKind}
+          AND r.state = 'active'
+          AND i.account_id = ${input.relayAccountId}
+          AND i.status = 'active'`;
+      if (relay.length !== 1) {
+        return Object.freeze({
+          status: "refused" as const,
+          reasonCode: "relay-not-active",
+        });
+      }
+      const grantId = uuidV7(now);
+      const claimHandle = randomBytes(32).toString("base64url");
+      const validUntil = new Date(
+        Date.parse(now) + GRANT_LEASE_MILLISECONDS,
+      ).toISOString();
+      await tx`
+        INSERT INTO eligibility_grants (
+          grant_id, project_ref_id, account_id, installation_id, capability,
+          policy_id, policy_revision, policy_hash, subject_hash,
+          claim_handle_hash, finality_status, state, issued_at, valid_until
+        ) VALUES (
+          ${grantId}, ${input.projectRefId}, ${input.relayAccountId},
+          ${input.relayInstallationId}, 'channel-relay',
+          ${String(policies[0].policy_id)},
+          ${String(policies[0].policy_revision)},
+          ${Buffer.from(policies[0].policy_hash as Uint8Array)},
+          ${crypto.hmacRelaySubject(input.servedAccountId, input.channelKind)},
+          ${crypto.hmacEligibilityClaimHandle(claimHandle)},
+          'not-applicable', 'active', ${now}::timestamptz,
+          ${validUntil}::timestamptz
+        )`;
+      return Object.freeze({
+        status: "issued" as const,
+        grantId,
+        claimHandle,
+        capability: "channel-relay" as const,
+        issuedAt: now,
+        validUntil,
+      });
+    });
+  }
+
 /** Standalone grant-lifecycle transitions shared with the recheck keeper. */
 export async function suspendGrantsForFinalityLoss(
   sql: Sql,
@@ -395,6 +495,7 @@ export async function suspendGrantsForFinalityLoss(
     SET state = 'suspended', finality_status = 'unavailable',
         suspended_at = ${now}::timestamptz
     WHERE source_chain_id = ${chainId} AND state = 'active'
+      AND capability <> 'channel-relay'
     RETURNING grant_id`;
   return rows.length;
 }
@@ -412,6 +513,7 @@ export async function revokeGrantsForOrphanedAnchor(
     WHERE source_chain_id = ${chainId}
       AND source_block_hash = ${hashBytes(blockHash)}
       AND state IN ('active', 'suspended')
+      AND capability <> 'channel-relay'
     RETURNING grant_id`;
   return rows.length;
 }

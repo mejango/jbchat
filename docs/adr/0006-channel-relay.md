@@ -118,16 +118,32 @@ is never added by default.
    storage-lab suites (intent lifecycle, HTTP add lifecycle, and a third
    member added to an activated conversation who reads and appends while
    the original members keep appending).
-2. **Relay provisioning + consent lane.** A service provisioner mints
-   the relay installation (installations + device_credentials +
-   KeyPackages need a dedicated service path — enrollment's wallet-proof
-   lane cannot make one), and the consent endpoint mints the Add's
-   eligibility grant. Decision recorded: a new grant capability
-   `channel-relay`, issued ONLY by the consent endpoint under the served
-   member's authenticated session, bound to the relay's service account
-   (requires extending the grants capability CHECK and the intent's
-   admitted-capability list by migration). The intent/commit lane itself
-   is unchanged — the member's device still commits the Add.
+2. **Relay provisioning + consent lane - SHIPPED.** Two decisions
+   recorded at implementation (owner, 2026-08-25): (a) relay-shaped rows
+   by migration 0025 rather than a fabricated enrollment chain - a
+   `key_packages` row of kind `relay-mls-key-package.v1` carries no device
+   credential, and an `eligibility_grants` row of capability
+   `channel-relay` carries no finality anchor
+   (`finality_status = 'not-applicable'`; the finality sweepers skip it);
+   (b) the external proposal recorded for a consent Add/Remove is the
+   service's authorization record (`jbm-relay-consent-authorization.v1` /
+   `-revocation.v1`), NOT an MLS PublicMessage - the bridge has no
+   external-sender signing verb yet, and the member's device commits a
+   self-authored Add/Remove exactly as activation does. The provisioner
+   (`relayInstallationStore.provision`) mints one relay per (served
+   account, channel): its own service account, an `installations` row
+   (`platform='desktop'`, a discarded DPoP key), the bridge identity +
+   KeyPackage, and the sealed post-KeyPackage snapshot; it tops the shelf
+   up on reuse. `POST /v1/conversations/{id}/relay` (served member's
+   session; verified Telegram channel required; bridge required) mints
+   the grant, composes the Add intent + proposal in-process and returns
+   the intent, the relay's taken KeyPackage and the anchor's mandatory
+   proposals; `DELETE` composes the Remove (the wasm client gained
+   `removeMember`; the commit lane now revokes the removed grant and
+   re-issues the head). The relay joins with the served member's role;
+   only the served member may compose its Add/Remove (`relay-not-yours`).
+   Conversation detail carries `relay.seats` for every member plus the
+   §3 statement; the `RelayPanel` shows it verbatim.
 3. **Outbound:** keeper drain (env-gated child, `send-push-wakeups`
    pattern) — mailbox entries for relay installations → FOR UPDATE on
    the sealed state row → `client/open-application` → channel send with

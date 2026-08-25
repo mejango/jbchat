@@ -116,6 +116,26 @@ export async function addMlsMembers(
   });
 }
 
+export interface MlsRemoveMemberResult {
+  readonly commit: Uint8Array;
+  readonly epoch: bigint;
+  readonly confirmedTranscriptHash: Uint8Array;
+}
+
+/** One Remove Commit for the member holding `signatureKey`. */
+export async function removeMlsMember(
+  groupId: Uint8Array,
+  signatureKey: Uint8Array,
+): Promise<MlsRemoveMemberResult> {
+  const client = await mlsClient();
+  const output = client.removeMember(groupId, signatureKey);
+  return persisted(client, {
+    commit: output.commit,
+    epoch: output.epoch,
+    confirmedTranscriptHash: output.confirmed_transcript_hash,
+  });
+}
+
 /** Join from a Welcome; returns the group id. */
 export async function joinMlsWelcome(welcome: Uint8Array): Promise<Uint8Array> {
   const client = await mlsClient();

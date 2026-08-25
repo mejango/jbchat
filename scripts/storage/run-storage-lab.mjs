@@ -895,6 +895,7 @@ async function main() {
         "src/production/storage/externalSenderRotation.pgtest.ts",
         "src/production/storage/conversationRequest.pgtest.ts",
         "src/production/storage/notificationChannel.pgtest.ts",
+        "src/production/storage/relayInstallation.pgtest.ts",
         "src/production/witness/witnessCore.pgtest.ts",
       ],
       {

@@ -600,10 +600,19 @@ export async function refreshCustodySnapshotDigest(
     SELECT conversation_id FROM delivery_conversation_authority
     WHERE conversation_id = ${conversationId} FOR UPDATE`;
   if (custody.length === 0) return;
+  // Only a live grant gets a fence: a revoked one (a removed member) no
+  // longer anchors to the current head, and its holder cannot append.
   const grants = await tx`
     SELECT installation_id FROM conversation_send_grants
-    WHERE conversation_id = ${conversationId}
+    WHERE conversation_id = ${conversationId} AND state = 'active'
     ORDER BY installation_id`;
+  await tx`
+    DELETE FROM delivery_sender_fences
+    WHERE conversation_id = ${conversationId}
+      AND installation_id NOT IN (
+        SELECT installation_id FROM conversation_send_grants
+        WHERE conversation_id = ${conversationId} AND state = 'active'
+      )`;
   let legacyDigest: string | null = null;
   for (const grant of grants) {
     const rebuilt = await reconstructAuthoritySnapshot(

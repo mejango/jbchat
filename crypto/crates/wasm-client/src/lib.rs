@@ -36,6 +36,15 @@ pub struct AddMemberOutput {
     pub confirmed_transcript_hash: Vec<u8>,
 }
 
+/// The artifacts a Remove Commit produces: the public Commit message and
+/// the resulting group state markers. No Welcome - nobody joins.
+#[wasm_bindgen(getter_with_clone)]
+pub struct RemoveMemberOutput {
+    pub commit: Vec<u8>,
+    pub epoch: u64,
+    pub confirmed_transcript_hash: Vec<u8>,
+}
+
 fn fail(error: core_mls::Error) -> JsError {
     JsError::new(&error.to_string())
 }
@@ -205,6 +214,35 @@ impl MlsClient {
         Ok(AddMemberOutput {
             commit,
             welcome,
+            epoch: group.epoch().as_u64(),
+            confirmed_transcript_hash: group
+                .public_group()
+                .group_context()
+                .confirmed_transcript_hash()
+                .to_vec(),
+        })
+    }
+
+    /// Remove the member whose leaf carries `signature_key` (the peer's MLS
+    /// credential public key, which the delivery plane publishes) in one
+    /// Remove Commit.
+    #[wasm_bindgen(js_name = removeMember)]
+    pub fn remove_member(
+        &self,
+        group_id: &[u8],
+        signature_key: &[u8],
+    ) -> Result<RemoveMemberOutput, JsError> {
+        let mut group =
+            core_mls::load_group(&self.provider, &GroupId::from_slice(group_id)).map_err(fail)?;
+        let index = group
+            .members()
+            .find(|member| member.signature_key == signature_key)
+            .map(|member| member.index)
+            .ok_or_else(|| state_fail("member not found"))?;
+        let commit = core_mls::remove_member(&mut group, &self.provider, &self.identity, index)
+            .map_err(fail)?;
+        Ok(RemoveMemberOutput {
+            commit,
             epoch: group.epoch().as_u64(),
             confirmed_transcript_hash: group
                 .public_group()

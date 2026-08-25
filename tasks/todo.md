@@ -372,3 +372,14 @@ human sign-off gate.
 - [x] Internal diagnostics mlsBridge field; docs (railway.md, ADR 0006 item 6)
 - [x] JBM_MLS_BRIDGE_BINARY on app + keeper
 - [x] check green → commit 9929a38 → deploy app+keeper SUCCESS → fruitful.chat enrollment-status.mlsBridge ready (pinned 0a4f0c15…)
+
+## Relay phase 2 — provisioning + consent (2026-08-25)
+- [x] Migration 0025 (key_packages relay kind; eligibility_grants channel-relay + not-applicable finality)
+- [x] relayInstallationStore (provision/seats/revoke) + fictional bridge port + labtest
+- [x] issueRelayGrant + hmacRelaySubject + sweeper exemption
+- [x] intent store: channel-relay admission + served-role lookup + relay-not-yours
+- [x] commit store: Remove completion (revoke grant + re-issue head); fences only for active grants
+- [x] HTTP: POST/DELETE /v1/conversations/{id}/relay; detail.relay
+- [x] wasm removeMember + mls.ts wrappers + conversation.ts enable/disableRelay + RelayPanel UI
+- [x] pgtests + lab (relay store suite, HTTP consent enable/disable); docs/ADR
+- [ ] check; deploy; memory

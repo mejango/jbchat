@@ -58,6 +58,7 @@ export type MembershipIntentCreation =
         | "target-not-enrolled"
         | "target-credential-missing"
         | "target-role-unresolvable"
+        | "relay-not-yours"
         | "project-not-provisioned"
         | "target-not-a-member"
         | "key-package-unavailable"
@@ -112,6 +113,7 @@ export function createMembershipIntentStore(
       targetAccountId: string;
       targetFingerprint: unknown;
       grantCapability: string;
+      requestedByInstallationId: string | null;
       now: string;
     },
   ): Promise<{ status: "ok" } | { status: "refused"; refusal: Refusal }> {
@@ -127,8 +129,12 @@ export function createMembershipIntentStore(
         AND state = 'active'
         AND expires_at > ${input.now}::timestamptz`;
     if (existing.length > 0) return Object.freeze({ status: "ok" as const });
-    const role = CAPABILITY_ROLES[input.purpose]?.[input.grantCapability];
+    const role =
+      input.grantCapability === "channel-relay"
+        ? await relayRoleFor(tx, input)
+        : CAPABILITY_ROLES[input.purpose]?.[input.grantCapability];
     if (role === undefined) return refuse("target-role-unresolvable");
+    if (role === "relay-not-yours") return refuse("relay-not-yours");
     if (
       typeof input.targetFingerprint !== "string" ||
       Buffer.from(input.targetFingerprint, "base64").length !== 32
@@ -155,6 +161,40 @@ export function createMembershipIntentStore(
         ${expiresAt}::timestamptz, 1, 'active'
       )`;
     return Object.freeze({ status: "ok" as const });
+  }
+
+  // ADR 0006 §1: a relay joins with the SAME role as the member it serves,
+  // and only that member may compose the Add - the relay's served account
+  // must be the requester's account and hold exactly one live role here.
+  async function relayRoleFor(
+    tx: TransactionSql,
+    input: {
+      conversationId: string;
+      targetInstallationId: string;
+      requestedByInstallationId: string | null;
+    },
+  ): Promise<string | undefined> {
+    if (input.requestedByInstallationId === null) return undefined;
+    const relays = await tx`
+      SELECT r.served_account_id, i.account_id AS requester_account_id
+      FROM relay_installations r
+      JOIN installations i
+        ON i.installation_id = ${input.requestedByInstallationId}
+      WHERE r.relay_installation_id = ${input.targetInstallationId}
+        AND r.state = 'active'`;
+    if (relays.length !== 1) return undefined;
+    if (
+      String(relays[0].served_account_id) !==
+      String(relays[0].requester_account_id)
+    ) {
+      return "relay-not-yours";
+    }
+    const roles = await tx`
+      SELECT DISTINCT role FROM memberships
+      WHERE conversation_id = ${input.conversationId}
+        AND account_id = ${String(relays[0].served_account_id)}
+        AND removed_at IS NULL`;
+    return roles.length === 1 ? String(roles[0].role) : undefined;
   }
 
   const dbNow = async (tx: TransactionSql): Promise<string> => {
@@ -283,7 +323,7 @@ export function createMembershipIntentStore(
             WHERE grant_id = ${grantId} FOR UPDATE`;
           const admittedCapabilities =
             purpose === "purchase_support"
-              ? ["purchase-support", "project-staff"]
+              ? ["purchase-support", "project-staff", "channel-relay"]
               : ["purchase-support", "project-staff", "token-holder", "item-set-buyer"];
           if (
             grants.length !== 1 ||
@@ -308,6 +348,18 @@ export function createMembershipIntentStore(
             return Object.freeze({
               status: "refused" as const,
               reasonCode: "target-not-a-member" as const,
+            });
+          }
+          // Only the served member may remove its own relay seat.
+          const relayRole = await relayRoleFor(tx, {
+            conversationId,
+            targetInstallationId,
+            requestedByInstallationId,
+          });
+          if (relayRole === "relay-not-yours") {
+            return Object.freeze({
+              status: "refused" as const,
+              reasonCode: "relay-not-yours" as const,
             });
           }
         }
@@ -388,6 +440,7 @@ export function createMembershipIntentStore(
             targetAccountId,
             targetFingerprint: targets[0].fingerprint,
             grantCapability: grantCapability!,
+            requestedByInstallationId,
             now,
           });
           if (issued.status !== "ok") return issued.refusal;

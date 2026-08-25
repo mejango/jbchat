@@ -70,6 +70,12 @@ export class MlsClient {
      */
     processCommit(group_id: Uint8Array, commit: Uint8Array): void;
     /**
+     * Remove the member whose leaf carries `signature_key` (the peer's MLS
+     * credential public key, which the delivery plane publishes) in one
+     * Remove Commit.
+     */
+    removeMember(group_id: Uint8Array, signature_key: Uint8Array): RemoveMemberOutput;
+    /**
      * Seal an application payload into a PrivateMessage.
      */
     sealApplication(group_id: Uint8Array, plaintext: Uint8Array): Uint8Array;
@@ -77,6 +83,19 @@ export class MlsClient {
      * Raw 32-byte Ed25519 signature public key of this identity.
      */
     signaturePublicKey(): Uint8Array;
+}
+
+/**
+ * The artifacts a Remove Commit produces: the public Commit message and
+ * the resulting group state markers. No Welcome - nobody joins.
+ */
+export class RemoveMemberOutput {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    commit: Uint8Array;
+    confirmed_transcript_hash: Uint8Array;
+    epoch: bigint;
 }
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
@@ -89,6 +108,7 @@ export interface InitOutput {
     readonly __wbg_get_addmemberoutput_epoch: (a: number) => bigint;
     readonly __wbg_get_addmemberoutput_welcome: (a: number, b: number) => void;
     readonly __wbg_mlsclient_free: (a: number, b: number) => void;
+    readonly __wbg_removememberoutput_free: (a: number, b: number) => void;
     readonly __wbg_set_addmemberoutput_commit: (a: number, b: number, c: number) => void;
     readonly __wbg_set_addmemberoutput_confirmed_transcript_hash: (a: number, b: number, c: number) => void;
     readonly __wbg_set_addmemberoutput_epoch: (a: number, b: bigint) => void;
@@ -106,8 +126,15 @@ export interface InitOutput {
     readonly mlsclient_new: (a: number, b: number, c: number) => void;
     readonly mlsclient_openApplication: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly mlsclient_processCommit: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
+    readonly mlsclient_removeMember: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly mlsclient_sealApplication: (a: number, b: number, c: number, d: number, e: number, f: number) => void;
     readonly mlsclient_signaturePublicKey: (a: number, b: number) => void;
+    readonly __wbg_set_removememberoutput_epoch: (a: number, b: bigint) => void;
+    readonly __wbg_get_removememberoutput_epoch: (a: number) => bigint;
+    readonly __wbg_set_removememberoutput_commit: (a: number, b: number, c: number) => void;
+    readonly __wbg_set_removememberoutput_confirmed_transcript_hash: (a: number, b: number, c: number) => void;
+    readonly __wbg_get_removememberoutput_commit: (a: number, b: number) => void;
+    readonly __wbg_get_removememberoutput_confirmed_transcript_hash: (a: number, b: number) => void;
     readonly __wbindgen_export: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number) => void;

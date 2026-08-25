@@ -62,6 +62,7 @@ describeStorage("membership intents", () => {
   let grantId: string;
   let projectRefId: string;
   let authorityBefore: AppendAuthoritySnapshot;
+  let externalSenderId: string;
 
   const enrollDevice = async (): Promise<{
     installationId: string;
@@ -268,7 +269,13 @@ describeStorage("membership intents", () => {
         ${Buffer.alloc(32, 0xa6)}, ${NOW}::timestamptz - interval '1 day',
         ${NOW}::timestamptz + interval '30 days', ${CHECKPOINT_ID},
         ${NOW}::timestamptz, 'published'
-      )`;
+      ) ON CONFLICT (project_ref_id, signer_generation) DO NOTHING`;
+    // An earlier suite may already have provisioned this project's
+    // generation-1 credential; adopt whichever row holds the slot.
+    const [senderRow] = await sql`
+      SELECT external_sender_credential_id FROM external_sender_credentials
+      WHERE project_ref_id = ${projectRefId} AND signer_generation = 1`;
+    externalSenderId = String(senderRow.external_sender_credential_id);
     // The Add commit re-issues the conversation's policy head under the
     // project's provisioned signer; the drills need the fixture graph back.
     await sql.begin((tx) =>
@@ -490,7 +497,7 @@ describeStorage("membership intents", () => {
       intentId: created.intentId,
       publicMessage: publicMessage.toString("base64url"),
       authorizationRecordHash,
-      signerExternalSenderCredentialId: EXTERNAL_SENDER_ID,
+      signerExternalSenderCredentialId: externalSenderId,
       transparencyCheckpointId: CHECKPOINT_ID,
     });
     expect(recorded.status).toBe("recorded");
@@ -545,7 +552,7 @@ describeStorage("membership intents", () => {
         intentId: created.intentId,
         publicMessage: publicMessage.toString("base64url"),
         authorizationRecordHash,
-        signerExternalSenderCredentialId: EXTERNAL_SENDER_ID,
+        signerExternalSenderCredentialId: externalSenderId,
         transparencyCheckpointId: CHECKPOINT_ID,
       }),
     ).resolves.toEqual({
@@ -600,7 +607,7 @@ describeStorage("membership intents", () => {
       intentId: created.intentId,
       publicMessage: Buffer.from("add-proposal", "utf8").toString("base64url"),
       authorizationRecordHash: Buffer.alloc(32, 0xab).toString("base64url"),
-      signerExternalSenderCredentialId: EXTERNAL_SENDER_ID,
+      signerExternalSenderCredentialId: externalSenderId,
       transparencyCheckpointId: CHECKPOINT_ID,
     });
     expect(proposed.status).toBe("recorded");

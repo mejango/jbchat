@@ -16,6 +16,7 @@ import {
   joinMlsWelcome,
   openMlsApplication,
   processMlsCommit,
+  removeMlsMember,
   sealMlsApplication,
 } from "./mls";
 
@@ -129,7 +130,14 @@ interface PlanMember {
   keyPackage?: string;
 }
 
-interface ConversationDetail {
+export interface RelayStatus {
+  seats: { installationId: string; channelKind: string; role: string; mine: boolean }[];
+  mine: { telegram: "none" | "pending" | "active" };
+  statement: string;
+}
+
+export interface ConversationDetail {
+  relay?: RelayStatus;
   etag: string;
   epoch: string;
   rosterVersion: string;
@@ -283,6 +291,132 @@ export async function syncWelcomes(): Promise<void> {
     // The Welcome's group state already covers its commit.
     await rememberGroup(entry.conversationId, groupId, entry.commitPosition);
   }
+}
+
+interface RelayIntentResponse {
+  operation: "add" | "remove";
+  relayInstallationId: string;
+  relaySignatureKey: string;
+  intent: {
+    intentId: string;
+    baseEpoch: string;
+    baseRosterVersion: string;
+    proposedRosterHash: string;
+    targetCredentialId: string | null;
+    takenKeyPackage: { keyPackage: string } | null;
+  };
+  mandatoryProposals: { proposalId: string; proposalHash: string }[];
+}
+
+/**
+ * ADR 0006 consent, member side: the service composes the intent +
+ * proposal; THIS device commits the Add (a self-authored MLS Add from the
+ * relay's KeyPackage, exactly like activation) and posts the Commit. The
+ * conversation stays closed to appends until the witness co-signs the
+ * re-issued policy head.
+ */
+export async function enableRelay(
+  conversationId: string,
+  channelKind: "telegram",
+): Promise<void> {
+  const groupId = await groupIdFor(conversationId);
+  if (groupId === null) throw new Error("device_cannot_commit");
+  const response = await api(
+    "POST",
+    `/v1/conversations/${conversationId}/relay`,
+    { channelKind },
+  );
+  if (response.status !== 201) {
+    throw new Error(await reason(response, "relay_refused"));
+  }
+  const composed = (await response.json()) as RelayIntentResponse;
+  const keyPackage = composed.intent.takenKeyPackage?.keyPackage;
+  if (!keyPackage) throw new Error("relay_key_package_missing");
+  const added = await addMlsMembers(groupId, [fromB64url(keyPackage)]);
+  const welcomeSha = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", added.welcome.slice().buffer),
+  );
+  await postMembershipCommit(conversationId, composed, {
+    commit: added.commit,
+    epoch: added.epoch,
+    confirmedTranscriptHash: added.confirmedTranscriptHash,
+    welcomeByInstallation: [
+      {
+        installationId: composed.relayInstallationId,
+        welcome: b64url(added.welcome),
+        welcomeSha256: b64url(welcomeSha),
+      },
+    ],
+  });
+}
+
+/** Disable = a real MLS Remove of the relay seat, committed by this device. */
+export async function disableRelay(conversationId: string): Promise<void> {
+  const groupId = await groupIdFor(conversationId);
+  if (groupId === null) throw new Error("device_cannot_commit");
+  const response = await api(
+    "DELETE",
+    `/v1/conversations/${conversationId}/relay`,
+  );
+  if (response.status !== 201) {
+    throw new Error(await reason(response, "relay_refused"));
+  }
+  const composed = (await response.json()) as RelayIntentResponse;
+  const removed = await removeMlsMember(
+    groupId,
+    fromB64url(composed.relaySignatureKey),
+  );
+  await postMembershipCommit(conversationId, composed, {
+    commit: removed.commit,
+    epoch: removed.epoch,
+    confirmedTranscriptHash: removed.confirmedTranscriptHash,
+    welcomeByInstallation: [],
+  });
+}
+
+async function postMembershipCommit(
+  conversationId: string,
+  composed: RelayIntentResponse,
+  mls: {
+    commit: Uint8Array;
+    epoch: bigint;
+    confirmedTranscriptHash: Uint8Array;
+    welcomeByInstallation: {
+      installationId: string;
+      welcome: string;
+      welcomeSha256: string;
+    }[];
+  },
+): Promise<void> {
+  const detail = await conversationDetail(conversationId);
+  const commitSha = new Uint8Array(
+    await crypto.subtle.digest("SHA-256", mls.commit.slice().buffer),
+  );
+  const response = await api(
+    "POST",
+    `/v1/conversations/${conversationId}/commits`,
+    {
+      intentId: composed.intent.intentId,
+      expectedEpoch: composed.intent.baseEpoch,
+      expectedRosterVersion: composed.intent.baseRosterVersion,
+      proposedRosterHash: composed.intent.proposedRosterHash,
+      mandatoryProposals: composed.mandatoryProposals,
+      envelopeId: crypto.randomUUID(),
+      commit: b64url(mls.commit),
+      envelopeSha256: b64url(commitSha),
+      baseConfirmedTranscriptHash: detail.confirmedTranscriptHash,
+      resultingConfirmedTranscriptHash: b64url(mls.confirmedTranscriptHash),
+      resultingEpoch: String(mls.epoch),
+      welcomeByInstallation: mls.welcomeByInstallation,
+      targetCredentialId: composed.intent.targetCredentialId,
+    },
+  );
+  if (response.status !== 200) {
+    throw new Error(await reason(response, "commit_refused"));
+  }
+  const committed = (await response.json()) as { position: string };
+  const groupId = await groupIdFor(conversationId);
+  if (groupId) await rememberGroup(conversationId, groupId, committed.position);
 }
 
 export async function conversationDetail(

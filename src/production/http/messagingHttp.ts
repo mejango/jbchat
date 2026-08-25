@@ -81,7 +81,17 @@ import {
   runPolicyWitnessSync,
   type PolicyWitnessSubmitPort,
 } from "../witness/policyWitnessSync";
-import { resolveMlsBridgeFromEnvironment } from "../mls/bridgeClient";
+import {
+  resolveMlsBridgeFromEnvironment,
+  type MlsBridgeClient,
+} from "../mls/bridgeClient";
+import {
+  createRelayInstallationStore,
+  type RelayBridgePort,
+  type RelayInstallationStore,
+} from "../storage/relayInstallationStore";
+import { issueRelayGrant } from "../entitlement/eligibilityStore";
+import { readProjectProvision } from "../storage/appendAuthority";
 import { rotateExternalSenderCredentials } from "../storage/externalSenderRotation";
 import { readCallAtFinalized } from "../chain/quorumReads";
 import { computeKeyPackageRef } from "../identity/identityCrypto";
@@ -132,6 +142,8 @@ export interface MessagingHttpContext {
     readonly publicKey: import("node:crypto").KeyObject;
   };
   readonly policyWitnessSubmit?: PolicyWitnessSubmitPort;
+  /** Lab override for the relay provisioner's bridge verbs. */
+  readonly mlsBridge?: RelayBridgePort | null;
 }
 
 export interface MessagingHttpHandlers {
@@ -222,6 +234,15 @@ export interface MessagingHttpHandlers {
   readonly policyWitnessSync: (request: Request) => Promise<Response>;
   /** Internal: records the server's external-sender Add/Remove proposal. */
   readonly recordMembershipProposal: (request: Request) => Promise<Response>;
+  /** ADR 0006 consent: compose the Add (POST) / Remove (DELETE) of the caller's relay. */
+  readonly enableConversationRelay: (
+    request: Request,
+    conversationId: string,
+  ) => Promise<Response>;
+  readonly disableConversationRelay: (
+    request: Request,
+    conversationId: string,
+  ) => Promise<Response>;
   readonly externalSenderRotation: (request: Request) => Promise<Response>;
   readonly rpcDiagnostics: (request: Request) => Promise<Response>;
   readonly enrollmentStatus: (request: Request) => Promise<Response>;
@@ -278,6 +299,7 @@ export function createMessagingHttpHandlers(
     readonly intents: MembershipIntentStore | null;
     readonly commits: MembershipCommitStore | null;
     readonly proposals: ExternalProposalStore | null;
+    readonly relays: RelayInstallationStore | null;
     readonly cursorCodec: ReturnType<
       typeof createKeyedConversationCursorCodec
     > | null;
@@ -370,6 +392,15 @@ export function createMessagingHttpHandlers(
       proposals: logSigner
         ? createExternalProposalStore({ sql, signer: logSigner })
         : null,
+      relays: (() => {
+        const bridge =
+          contextValue.mlsBridge === undefined
+            ? environmentRelayBridge()
+            : contextValue.mlsBridge;
+        return bridge
+          ? createRelayInstallationStore({ sql, bridge, seal: crypto })
+          : null;
+      })(),
       cursorCodec: config.cursor
         ? createKeyedConversationCursorCodec({
             keyId: config.cursor.keyId,
@@ -472,6 +503,161 @@ export function createMessagingHttpHandlers(
     };
     return cached;
   };
+
+  // ADR 0006 §3 - the product copy must say exactly this.
+  const RELAY_CONFIDENTIALITY_STATEMENT =
+    "While this relay is active, this conversation's messages transit the service for your Telegram delivery and live transiently on Telegram's servers. This is a per-conversation downgrade from device-only end-to-end encryption to service-mediated delivery, chosen by you and visible to everyone in the conversation.";
+
+  async function liveMembership(
+    wired: Wired,
+    conversationId: string,
+    session: AuthenticatedSession,
+  ): Promise<{ role: string; projectRefId: string } | null> {
+    const rows = await wired.sql`
+      SELECT m.role, c.project_ref_id
+      FROM memberships m
+      JOIN conversations c ON c.conversation_id = m.conversation_id
+      WHERE m.conversation_id = ${conversationId}
+        AND m.installation_id = ${session.installationId}
+        AND m.removed_at IS NULL`;
+    if (rows.length !== 1) return null;
+    return { role: String(rows[0].role), projectRefId: String(rows[0].project_ref_id) };
+  }
+
+  async function relayStatusFor(
+    wired: Wired,
+    conversationId: string,
+    accountId: string,
+  ): Promise<Record<string, unknown>> {
+    const seats = wired.relays
+      ? await wired.relays.seatsForConversation(conversationId)
+      : [];
+    const pending = await wired.sql`
+      SELECT r.channel_kind FROM membership_intents mi
+      JOIN relay_installations r ON r.relay_installation_id = mi.target_installation_id
+      WHERE mi.conversation_id = ${conversationId}
+        AND mi.operation = 'add'
+        AND mi.state IN ('requested', 'authorized', 'proposed')
+        AND r.served_account_id = ${accountId}`;
+    const mineTelegram = seats.some(
+      (seat) => seat.servedAccountId === accountId && seat.channelKind === "telegram",
+    )
+      ? "active"
+      : pending.some((row) => String(row.channel_kind) === "telegram")
+        ? "pending"
+        : "none";
+    return {
+      seats: seats.map((seat) => ({
+        installationId: seat.installationId,
+        channelKind: seat.channelKind,
+        role: seat.role,
+        mine: seat.servedAccountId === accountId,
+      })),
+      mine: { telegram: mineTelegram },
+      statement: RELAY_CONFIDENTIALITY_STATEMENT,
+    };
+  }
+
+  /**
+   * The consent lane's server half (ADR 0006 §2): a normal membership intent
+   * targeting the relay plus the service's external proposal, recorded
+   * in-process. The proposal's PublicMessage is the service's authorization
+   * record - the bridge has no external-sender signing verb yet, and the
+   * member's device commits a self-authored Add/Remove exactly as activation
+   * does - so it is labelled as such rather than dressed up as MLS.
+   */
+  async function composeRelayIntent(
+    wired: Wired,
+    input: {
+      conversationId: string;
+      session: AuthenticatedSession;
+      operation: "add" | "remove";
+      relayInstallationId: string;
+      channelKind: string;
+      grantId: string | null;
+      projectRefId: string;
+    },
+  ): Promise<Response> {
+    const intents = wired.intents!;
+    const proposals = wired.proposals!;
+    const created = await intents.createIntent({
+      operation: input.operation,
+      conversationId: input.conversationId,
+      targetInstallationId: input.relayInstallationId,
+      requestedByInstallationId: input.session.installationId,
+      grantId: input.grantId,
+    });
+    if (created.status === "conflict") return problem(409, created.reasonCode);
+    if (created.status === "refused") {
+      return problem(
+        created.reasonCode === "malformed-request" ? 400 : 403,
+        created.reasonCode,
+      );
+    }
+    const provision = await wired.sql.begin((tx) =>
+      readProjectProvision(tx, input.projectRefId),
+    );
+    if (!provision) {
+      await intents.cancelIntent(created.intentId, input.session.installationId);
+      return problem(503, "project_not_provisioned");
+    }
+    const record = Buffer.from(
+      JSON.stringify({
+        kind:
+          input.operation === "add"
+            ? "jbm-relay-consent-authorization.v1"
+            : "jbm-relay-consent-revocation.v1",
+        intentId: created.intentId,
+        conversationId: input.conversationId,
+        relayInstallationId: input.relayInstallationId,
+        servedAccountId: input.session.accountId,
+        channelKind: input.channelKind,
+        issuedAt: created.expiresAt,
+      }),
+      "utf8",
+    );
+    const recorded = await proposals.recordProposal({
+      intentId: created.intentId,
+      publicMessage: record.toString("base64url"),
+      authorizationRecordHash: createHash("sha256")
+        .update(record)
+        .digest("base64url"),
+      signerExternalSenderCredentialId: String(
+        provision.current_external_sender_credential_id,
+      ),
+      transparencyCheckpointId: String(provision.policy_log_checkpoint_id),
+    });
+    if (recorded.status !== "recorded") {
+      await intents.cancelIntent(created.intentId, input.session.installationId);
+      return problem(503, recorded.reasonCode);
+    }
+    const mandatory = await wired.sql`
+      SELECT p.proposal_id, p.proposal_hash
+      FROM delivery_policy_head_anchors a
+      JOIN policy_head_mandatory_proposals p ON p.policy_head_id = a.policy_head_id
+      WHERE a.conversation_id = ${input.conversationId}
+      ORDER BY p.ordinal`;
+    const relayKey = await wired.sql`
+      SELECT encode(mls_credential_public, 'base64') AS key FROM installations
+      WHERE installation_id = ${input.relayInstallationId}`;
+    return jsonNoStore(201, {
+      operation: input.operation,
+      relayInstallationId: input.relayInstallationId,
+      relaySignatureKey: Buffer.from(
+        String(relayKey[0]?.key ?? "").replace(/\s/g, ""),
+        "base64",
+      ).toString("base64url"),
+      channelKind: input.channelKind,
+      intent: created,
+      mandatoryProposals: mandatory.map((row) => ({
+        proposalId: String(row.proposal_id),
+        proposalHash: Buffer.from(row.proposal_hash as Uint8Array).toString(
+          "base64url",
+        ),
+      })),
+      statement: RELAY_CONFIDENTIALITY_STATEMENT,
+    });
+  }
 
   const authenticate = async (
     wired: Wired,
@@ -1861,8 +2047,10 @@ export function createMessagingHttpHandlers(
         Buffer.from(String(value).replace(/\s/g, ""), "base64").toString(
           "base64url",
         );
+      const relay = await relayStatusFor(wired, conversationId, session.accountId);
       return jsonNoStore(200, {
         conversationId,
+        relay,
         etag: String(row.etag),
         state: String(row.state),
         epoch: String(row.epoch),
@@ -2012,6 +2200,99 @@ export function createMessagingHttpHandlers(
         return problem(403, recorded.reasonCode);
       }
       return jsonNoStore(201, recorded);
+    },
+
+    async enableConversationRelay(
+      request: Request,
+      conversationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!UUID_PATTERN.test(conversationId)) return notFound();
+      if (!wired.intents || !wired.proposals || !wired.provisioningSeed) {
+        return notFound();
+      }
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const channelKind = (body as Record<string, unknown>).channelKind;
+      if (channelKind !== "telegram") {
+        return problem(400, "unsupported_channel");
+      }
+      const membership = await liveMembership(wired, conversationId, session);
+      if (!membership) return notFound();
+      const targets = await wired.notifications.activeTargets(session.accountId);
+      if (!targets.some((target) => target.kind === channelKind)) {
+        return problem(403, "channel_not_verified");
+      }
+      if (!wired.relays) return problem(503, "bridge_unavailable");
+      const seats = await wired.relays.seatsForConversation(conversationId);
+      if (
+        seats.some(
+          (seat) =>
+            seat.servedAccountId === session.accountId &&
+            seat.channelKind === channelKind,
+        )
+      ) {
+        return problem(409, "relay_already_member");
+      }
+      const relay = await wired.relays.provision({
+        servedAccountId: session.accountId,
+        channelKind,
+      });
+      const grant = await issueRelayGrant(
+        wired.sql,
+        wired.crypto,
+        {
+          projectRefId: membership.projectRefId,
+          relayAccountId: relay.relayAccountId,
+          relayInstallationId: relay.relayInstallationId,
+          servedAccountId: session.accountId,
+          channelKind,
+        },
+        now(),
+      );
+      if (grant.status !== "issued") return problem(503, grant.reasonCode);
+      return composeRelayIntent(wired, {
+        conversationId,
+        session,
+        operation: "add",
+        relayInstallationId: relay.relayInstallationId,
+        channelKind,
+        grantId: grant.grantId,
+        projectRefId: membership.projectRefId,
+      });
+    },
+
+    async disableConversationRelay(
+      request: Request,
+      conversationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "DELETE") return notFound();
+      if (!UUID_PATTERN.test(conversationId)) return notFound();
+      if (!wired.intents || !wired.proposals || !wired.provisioningSeed) {
+        return notFound();
+      }
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const membership = await liveMembership(wired, conversationId, session);
+      if (!membership) return notFound();
+      if (!wired.relays) return problem(503, "bridge_unavailable");
+      const seat = (await wired.relays.seatsForConversation(conversationId)).find(
+        (candidate) => candidate.servedAccountId === session.accountId,
+      );
+      if (!seat) return problem(404, "relay_not_active");
+      return composeRelayIntent(wired, {
+        conversationId,
+        session,
+        operation: "remove",
+        relayInstallationId: seat.installationId,
+        channelKind: seat.channelKind,
+        grantId: null,
+        projectRefId: membership.projectRefId,
+      });
     },
 
     async enrollmentStatus(request: Request): Promise<Response> {
@@ -2420,6 +2701,28 @@ function jsonNoStore(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { "Content-Type": MEDIA_TYPE, ...noStoreHeaders() },
+  });
+}
+
+/** The production relay provisioner's bridge: one pinned subprocess per call. */
+function environmentRelayBridge(): RelayBridgePort | null {
+  const resolved = resolveMlsBridgeFromEnvironment();
+  if (resolved.status !== "ready") return null;
+  const withBridge = async <T,>(
+    run: (client: MlsBridgeClient) => Promise<T>,
+  ): Promise<T> => {
+    const client = resolved.open();
+    try {
+      return await run(client);
+    } finally {
+      client.close();
+    }
+  };
+  return Object.freeze({
+    createIdentity: (label: string) =>
+      withBridge((client) => client.createIdentity(label)),
+    generateKeyPackage: (state: string) =>
+      withBridge((client) => client.generateKeyPackage(state)),
   });
 }
 

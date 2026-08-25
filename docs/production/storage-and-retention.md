@@ -1075,6 +1075,14 @@ CREATE INDEX eligibility_active_idx
   ON eligibility_grants(account_id, project_ref_id, capability, valid_until)
   WHERE state = 'active';
 
+Migration 0025 (ADR 0006 phase 2) relaxes two constraints for relay-shaped
+rows only: `key_packages.device_credential_id` / `device_credential_revocation_version`
+are NULL exactly when `package_kind = 'relay-mls-key-package.v1'`, and the
+seven finality-anchor columns of `eligibility_grants` are NULL exactly when
+`finality_status = 'not-applicable'`, which is exactly when
+`capability = 'channel-relay'`. An active grant now requires
+`finality_status IN ('verified-finalized', 'not-applicable')`.
+
 CREATE TABLE contact_preferences (
   project_ref_id uuid NOT NULL REFERENCES project_refs(project_ref_id),
   account_id uuid NOT NULL REFERENCES accounts(account_id),

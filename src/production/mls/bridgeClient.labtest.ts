@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { afterAll, describe, expect, it } from "vitest";
+import { createKeyedIdentityCrypto } from "../identity/identityKeyedCrypto";
 import {
   createMlsBridgeClient,
   type MlsBridgeClient,
@@ -66,6 +67,14 @@ describeBridge("mls bridge", () => {
     expect(generated.state).not.toBe(created.state);
     const validation = await client.validateKeyPackage(generated.keyPackage);
     expect(validation.valid).toBe(true);
+    // The relay provisioner seals this exact snapshot with the identity
+    // secret and hands it back verbatim on the next verb.
+    const seal = createKeyedIdentityCrypto(Buffer.alloc(32, 0x5f));
+    const sealed = seal.sealPayload(generated.state);
+    const reopened = seal.openPayload(sealed.ciphertext, sealed.kmsKeyVersion);
+    expect(reopened).toBe(generated.state);
+    const next = await client.generateKeyPackage(reopened);
+    expect(next.keyPackage).not.toBe(generated.keyPackage);
 
     // A garbage welcome fails closed with a stable code, never a crash.
     await expect(

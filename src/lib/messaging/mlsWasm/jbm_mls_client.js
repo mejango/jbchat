@@ -438,6 +438,33 @@ export class MlsClient {
         }
     }
     /**
+     * Remove the member whose leaf carries `signature_key` (the peer's MLS
+     * credential public key, which the delivery plane publishes) in one
+     * Remove Commit.
+     * @param {Uint8Array} group_id
+     * @param {Uint8Array} signature_key
+     * @returns {RemoveMemberOutput}
+     */
+    removeMember(group_id, signature_key) {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            const ptr0 = passArray8ToWasm0(group_id, wasm.__wbindgen_export3);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passArray8ToWasm0(signature_key, wasm.__wbindgen_export3);
+            const len1 = WASM_VECTOR_LEN;
+            wasm.mlsclient_removeMember(retptr, this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
+            if (r2) {
+                throw takeObject(r1);
+            }
+            return RemoveMemberOutput.__wrap(r0);
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
      * Seal an application payload into a PrivateMessage.
      * @param {Uint8Array} group_id
      * @param {Uint8Array} plaintext
@@ -484,6 +511,91 @@ export class MlsClient {
     }
 }
 if (Symbol.dispose) MlsClient.prototype[Symbol.dispose] = MlsClient.prototype.free;
+
+/**
+ * The artifacts a Remove Commit produces: the public Commit message and
+ * the resulting group state markers. No Welcome - nobody joins.
+ */
+export class RemoveMemberOutput {
+    static __wrap(ptr) {
+        const obj = Object.create(RemoveMemberOutput.prototype);
+        obj.__wbg_ptr = ptr;
+        RemoveMemberOutputFinalization.register(obj, obj.__wbg_ptr, obj);
+        return obj;
+    }
+    __destroy_into_raw() {
+        const ptr = this.__wbg_ptr;
+        this.__wbg_ptr = 0;
+        RemoveMemberOutputFinalization.unregister(this);
+        return ptr;
+    }
+    free() {
+        const ptr = this.__destroy_into_raw();
+        wasm.__wbg_removememberoutput_free(ptr, 0);
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get commit() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.__wbg_get_removememberoutput_commit(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export2(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {Uint8Array}
+     */
+    get confirmed_transcript_hash() {
+        try {
+            const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+            wasm.__wbg_get_removememberoutput_confirmed_transcript_hash(retptr, this.__wbg_ptr);
+            var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+            var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+            var v1 = getArrayU8FromWasm0(r0, r1).slice();
+            wasm.__wbindgen_export2(r0, r1 * 1, 1);
+            return v1;
+        } finally {
+            wasm.__wbindgen_add_to_stack_pointer(16);
+        }
+    }
+    /**
+     * @returns {bigint}
+     */
+    get epoch() {
+        const ret = wasm.__wbg_get_removememberoutput_epoch(this.__wbg_ptr);
+        return BigInt.asUintN(64, ret);
+    }
+    /**
+     * @param {Uint8Array} arg0
+     */
+    set commit(arg0) {
+        const ptr0 = passArray8ToWasm0(arg0, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.__wbg_set_removememberoutput_commit(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {Uint8Array} arg0
+     */
+    set confirmed_transcript_hash(arg0) {
+        const ptr0 = passArray8ToWasm0(arg0, wasm.__wbindgen_export3);
+        const len0 = WASM_VECTOR_LEN;
+        wasm.__wbg_set_removememberoutput_confirmed_transcript_hash(this.__wbg_ptr, ptr0, len0);
+    }
+    /**
+     * @param {bigint} arg0
+     */
+    set epoch(arg0) {
+        wasm.__wbg_set_removememberoutput_epoch(this.__wbg_ptr, arg0);
+    }
+}
+if (Symbol.dispose) RemoveMemberOutput.prototype[Symbol.dispose] = RemoveMemberOutput.prototype.free;
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -613,6 +725,9 @@ const AddMemberOutputFinalization = (typeof FinalizationRegistry === 'undefined'
 const MlsClientFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_mlsclient_free(ptr, 1));
+const RemoveMemberOutputFinalization = (typeof FinalizationRegistry === 'undefined')
+    ? { register: () => {}, unregister: () => {} }
+    : new FinalizationRegistry(ptr => wasm.__wbg_removememberoutput_free(ptr, 1));
 
 function addHeapObject(obj) {
     if (heap_next === heap.length) heap.push(heap.length + 1);

@@ -781,16 +781,69 @@ export function createMembershipCommitStore(
             if (issued.status !== "issued") {
               throw new CommitCasError("policy-head-unavailable");
             }
+            await recordPolicyTransition(tx, conversationId, issued, position, now);
+          } else {
+            // 4c. A Remove revokes the removed member's send grant and
+            // re-issues the head over the remaining grants, so the anchor
+            // matches the post-Commit epoch/roster and the removed member
+            // holds no authority the append lane would ever consult.
+            const projectRefId = String(conversation.project_ref_id);
+            const provision = await readProjectProvision(tx, projectRefId);
+            if (!provision) {
+              throw new CommitCasError("authority-provision-missing");
+            }
             await tx`
-              INSERT INTO conversation_policy_transitions (
-                conversation_id, policy_head_sequence, policy_head_id,
-                policy_head_hash, effective_from_position, created_at
-              ) VALUES (
-                ${conversationId}, ${issued.policyHeadSequence},
-                ${issued.policyHeadId},
-                ${Buffer.from(issued.policyHeadHash, "base64url")},
-                ${position}, ${now}::timestamptz
-              ) ON CONFLICT DO NOTHING`;
+              UPDATE conversation_send_grants SET state = 'revoked'
+              WHERE conversation_id = ${conversationId}
+                AND installation_id = ${targetInstallationId}`;
+            const remaining = await tx`
+              SELECT installation_id, credential_id, role,
+                     role_credential_fingerprint,
+                     role_credential_subject_account_id,
+                     role_credential_valid_from, role_credential_valid_until,
+                     expires_at
+              FROM conversation_send_grants
+              WHERE conversation_id = ${conversationId}
+                AND state = 'active'
+              ORDER BY installation_id`;
+            if (remaining.length === 0) {
+              throw new CommitCasError("no-remaining-send-grants");
+            }
+            const grants: GrantMaterial[] = remaining.map((row) => ({
+              installationId: String(row.installation_id),
+              accountId: String(row.role_credential_subject_account_id),
+              credentialId: String(row.credential_id),
+              role: String(row.role),
+              credentialFingerprint: b64(
+                row.role_credential_fingerprint as Uint8Array,
+              ),
+              validFrom: new Date(
+                row.role_credential_valid_from as Date,
+              ).toISOString(),
+              validUntil: new Date(
+                row.role_credential_valid_until as Date,
+              ).toISOString(),
+              expiresAt: new Date(row.expires_at as Date).toISOString(),
+            }));
+            const issued = await issueConversationPolicyHead(tx, {
+              provisioningSeed,
+              conversationId,
+              projectRefId,
+              provision,
+              conversationKind: purpose,
+              conversationGeneration: String(conversation.generation),
+              quotaPolicyDigest: Buffer.from(
+                conversation.quota_policy_digest as Uint8Array,
+              ),
+              grants,
+              selectedInstallationId: grants[0].installationId,
+              anchor: { mode: "update" },
+              now,
+            });
+            if (issued.status !== "issued") {
+              throw new CommitCasError("policy-head-unavailable");
+            }
+            await recordPolicyTransition(tx, conversationId, issued, position, now);
           }
 
           // 5. Mailbox fan-out: one item per live member; the added target's
@@ -894,6 +947,24 @@ function expectHash(value: unknown): string {
     throw new TypeError("Expected a 32-byte base64url hash.");
   }
   return text;
+}
+
+async function recordPolicyTransition(
+  tx: TransactionSql,
+  conversationId: string,
+  issued: { policyHeadSequence: string; policyHeadId: string; policyHeadHash: string },
+  position: string,
+  now: string,
+): Promise<void> {
+  await tx`
+    INSERT INTO conversation_policy_transitions (
+      conversation_id, policy_head_sequence, policy_head_id,
+      policy_head_hash, effective_from_position, created_at
+    ) VALUES (
+      ${conversationId}, ${issued.policyHeadSequence}, ${issued.policyHeadId},
+      ${Buffer.from(issued.policyHeadHash, "base64url")},
+      ${position}, ${now}::timestamptz
+    ) ON CONFLICT DO NOTHING`;
 }
 
 function b64(value: Uint8Array): string {

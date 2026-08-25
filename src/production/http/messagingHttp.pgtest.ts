@@ -36,6 +36,8 @@ import {
   type AppendAuthoritySnapshot,
 } from "../storage/postgresDeliveryLab.testing";
 import { provisionProjectMessaging } from "../storage/appendAuthority";
+import { createNotificationChannelStore } from "../storage/notificationChannelStore";
+import { fictionalRelayBridgeForTesting } from "../storage/relayBridge.testing";
 import { createInProcessDpopReplayGuard } from "./dpop";
 import { createMessagingHttpHandlers } from "./messagingHttp";
 import { fictionalDeliveryLabKeyPairForTesting } from "../delivery/fictionalCryptoPorts.testing";
@@ -851,6 +853,7 @@ describeStorage("messaging HTTP surface", () => {
       },
       logSignerKeyId: "fictional-delivery-lab-2026q3",
       deliveryKeys: fictionalDeliveryLabKeyPairForTesting(),
+      mlsBridge: fictionalRelayBridgeForTesting(),
       chainRegistry: registry,
       replayGuard: createInProcessDpopReplayGuard({
         nowEpochMilliseconds: () => labClockMs,
@@ -1592,6 +1595,251 @@ describeStorage("messaging HTTP surface", () => {
     ]);
   });
 
+  it("enables and disables a Telegram relay by consent", async () => {
+    const conversationId = activatedConversationId;
+    const channels = createNotificationChannelStore({
+      sql,
+      hmacSecret: (secret: string) =>
+        createHash("sha256").update("lab-relay-channel").update(secret).digest(),
+      now: () => NOW,
+    });
+    const relayPath = `/v1/conversations/${conversationId}/relay`;
+    const grantsBefore = await sql`
+      SELECT installation_id FROM conversation_send_grants
+      WHERE conversation_id = ${conversationId} AND state = 'active'`;
+    const membersBefore = grantsBefore.map((grant) => String(grant.installation_id)).sort();
+
+    // No verified Telegram channel: the consent lane refuses, nothing is minted.
+    const unlinked = await handlers8453.enableConversationRelay(
+      authedRequest(projectOwner, "POST", relayPath, { channelKind: "telegram" }),
+      conversationId,
+    );
+    expect(unlinked.status).toBe(403);
+    expect(await unlinked.json()).toMatchObject({ reasonCode: "channel_not_verified" });
+
+    const linked = await channels.createChannel({
+      accountId: customer.accountId,
+      kind: "telegram",
+      target: "telegram",
+    });
+    if (linked.status !== "created") throw new Error(linked.reasonCode);
+    expect(
+      (await channels.redeemTelegramToken({ token: linked.secret, chatId: "777001" }))
+        .status,
+    ).toBe("active");
+
+    // 1. Consent: the served member's session composes the Add.
+    const enabled = await handlers8453.enableConversationRelay(
+      authedRequest(customer, "POST", relayPath, { channelKind: "telegram" }),
+      conversationId,
+    );
+    if (enabled.status !== 201) {
+      throw new Error(`relay consent refused: ${await enabled.text()}`);
+    }
+    const composed = (await enabled.json()) as {
+      operation: string;
+      relayInstallationId: string;
+      relaySignatureKey: string;
+      intent: {
+        intentId: string;
+        baseEpoch: string;
+        baseRosterVersion: string;
+        proposedRosterHash: string;
+        targetCredentialId: string;
+        takenKeyPackage: { keyPackage: string } | null;
+      };
+      mandatoryProposals: unknown[];
+      statement: string;
+    };
+    expect(composed.operation).toBe("add");
+    expect(composed.intent.takenKeyPackage).not.toBeNull();
+    expect(composed.mandatoryProposals).toEqual([]);
+    expect(composed.statement).toContain("downgrade");
+    const [relayRow] = await sql`
+      SELECT served_account_id, channel_kind, state FROM relay_installations
+      WHERE relay_installation_id = ${composed.relayInstallationId}`;
+    expect(relayRow).toMatchObject({ channel_kind: "telegram", state: "active" });
+    expect(String(relayRow.served_account_id)).toBe(customer.accountId);
+    const [relayCredential] = await sql`
+      SELECT role FROM role_credentials
+      WHERE credential_id = ${composed.intent.targetCredentialId}`;
+    // The relay joins with the SERVED member's role.
+    expect(String(relayCredential.role)).toBe("customer");
+    const pendingDetail = (await (
+      await handlers8453.readConversationDetail(
+        authedRequest(customer, "GET", `/v1/conversations/${conversationId}`),
+        conversationId,
+      )
+    ).json()) as { relay: { mine: { telegram: string } } };
+    expect(pendingDetail.relay.mine.telegram).toBe("pending");
+
+    // 2. The member's device commits the Add.
+    const [before] = await sql`
+      SELECT confirmed_transcript_hash FROM conversations
+      WHERE conversation_id = ${conversationId}`;
+    const addCommit = Buffer.from("relay-add-commit", "utf8");
+    const committed = await handlers8453.consumeCommit(
+      authedRequest(customer, "POST", `/v1/conversations/${conversationId}/commits`, {
+        intentId: composed.intent.intentId,
+        expectedEpoch: composed.intent.baseEpoch,
+        expectedRosterVersion: composed.intent.baseRosterVersion,
+        proposedRosterHash: composed.intent.proposedRosterHash,
+        mandatoryProposals: composed.mandatoryProposals,
+        envelopeId: randomUUID(),
+        commit: addCommit.toString("base64url"),
+        envelopeSha256: createHash("sha256").update(addCommit).digest("base64url"),
+        baseConfirmedTranscriptHash: (
+          before.confirmed_transcript_hash as Buffer
+        ).toString("base64url"),
+        resultingConfirmedTranscriptHash: Buffer.alloc(32, 0xd1).toString("base64url"),
+        resultingEpoch: String(BigInt(composed.intent.baseEpoch) + 1n),
+        welcomeByInstallation: [
+          {
+            installationId: composed.relayInstallationId,
+            welcome: Buffer.from("relay-welcome", "utf8").toString("base64url"),
+          },
+        ],
+        targetCredentialId: composed.intent.targetCredentialId,
+      }),
+      conversationId,
+    );
+    if (committed.status !== 200) {
+      throw new Error(`relay add commit refused: ${await committed.text()}`);
+    }
+    const witnessed = await runPolicyWitnessSync(sql, witnessPort(), {
+      provisioningSeed: PROVISIONING_SEED,
+    });
+    expect(witnessed.blocked).toBeNull();
+
+    // 3. Both sides see the seat; both original members still append; the
+    // relay's mailbox carries the Commit it will drain in phase 3.
+    const ownerDetail = (await (
+      await handlers8453.readConversationDetail(
+        authedRequest(projectOwner, "GET", `/v1/conversations/${conversationId}`),
+        conversationId,
+      )
+    ).json()) as {
+      relay: { seats: { installationId: string; role: string; mine: boolean }[] };
+    };
+    expect(ownerDetail.relay.seats).toEqual([
+      {
+        installationId: composed.relayInstallationId,
+        channelKind: "telegram",
+        role: "customer",
+        mine: false,
+      },
+    ]);
+    const customerDetail = (await (
+      await handlers8453.readConversationDetail(
+        authedRequest(customer, "GET", `/v1/conversations/${conversationId}`),
+        conversationId,
+      )
+    ).json()) as { relay: { mine: { telegram: string } } };
+    expect(customerDetail.relay.mine.telegram).toBe("active");
+    for (const [device, label] of [
+      [customer, "customer"],
+      [projectOwner, "owner"],
+    ] as const) {
+      const sent = await sendVia(device, conversationId, `${label} with relay`);
+      if (sent.status !== 201) {
+        throw new Error(`${label} append refused: ${JSON.stringify(sent.body)}`);
+      }
+    }
+    const relayMailbox = await sql`
+      SELECT delivery_class FROM mailbox_entries
+      WHERE installation_id = ${composed.relayInstallationId}
+        AND conversation_id = ${conversationId}
+      ORDER BY mailbox_position`;
+    expect(relayMailbox.map((row) => String(row.delivery_class))).toEqual([
+      "commit",
+      "application",
+      "application",
+    ]);
+    const duplicate = await handlers8453.enableConversationRelay(
+      authedRequest(customer, "POST", relayPath, { channelKind: "telegram" }),
+      conversationId,
+    );
+    expect(duplicate.status).toBe(409);
+
+    // 4. Disable: only the served member may compose the Remove.
+    const notYours = await handlers8453.disableConversationRelay(
+      authedRequest(projectOwner, "DELETE", relayPath),
+      conversationId,
+    );
+    expect(notYours.status).toBe(404);
+    const disabled = await handlers8453.disableConversationRelay(
+      authedRequest(customer, "DELETE", relayPath),
+      conversationId,
+    );
+    if (disabled.status !== 201) {
+      throw new Error(`relay disable refused: ${await disabled.text()}`);
+    }
+    const removal = (await disabled.json()) as typeof composed;
+    expect(removal.operation).toBe("remove");
+    expect(Buffer.from(removal.relaySignatureKey, "base64url")).toHaveLength(32);
+    const [beforeRemove] = await sql`
+      SELECT confirmed_transcript_hash FROM conversations
+      WHERE conversation_id = ${conversationId}`;
+    const removeCommit = Buffer.from("relay-remove-commit", "utf8");
+    const removed = await handlers8453.consumeCommit(
+      authedRequest(customer, "POST", `/v1/conversations/${conversationId}/commits`, {
+        intentId: removal.intent.intentId,
+        expectedEpoch: removal.intent.baseEpoch,
+        expectedRosterVersion: removal.intent.baseRosterVersion,
+        proposedRosterHash: removal.intent.proposedRosterHash,
+        mandatoryProposals: removal.mandatoryProposals,
+        envelopeId: randomUUID(),
+        commit: removeCommit.toString("base64url"),
+        envelopeSha256: createHash("sha256").update(removeCommit).digest("base64url"),
+        baseConfirmedTranscriptHash: (
+          beforeRemove.confirmed_transcript_hash as Buffer
+        ).toString("base64url"),
+        resultingConfirmedTranscriptHash: Buffer.alloc(32, 0xd2).toString("base64url"),
+        resultingEpoch: String(BigInt(removal.intent.baseEpoch) + 1n),
+        welcomeByInstallation: [],
+        targetCredentialId: null,
+      }),
+      conversationId,
+    );
+    if (removed.status !== 200) {
+      throw new Error(`relay remove commit refused: ${await removed.text()}`);
+    }
+    const rewitnessed = await runPolicyWitnessSync(sql, witnessPort(), {
+      provisioningSeed: PROVISIONING_SEED,
+    });
+    expect(rewitnessed.blocked).toBeNull();
+    const grants = await sql`
+      SELECT installation_id, state, policy_head_sequence
+      FROM conversation_send_grants
+      WHERE conversation_id = ${conversationId} ORDER BY installation_id`;
+    const activeAfter = grants
+      .filter((grant) => String(grant.state) === "active")
+      .map((grant) => String(grant.installation_id))
+      .sort();
+    expect(activeAfter, JSON.stringify(grants)).toEqual(membersBefore);
+    expect(
+      grants.find((grant) => String(grant.installation_id) === composed.relayInstallationId),
+      JSON.stringify(grants),
+    ).toMatchObject({ state: "revoked" });
+    const afterDetail = (await (
+      await handlers8453.readConversationDetail(
+        authedRequest(customer, "GET", `/v1/conversations/${conversationId}`),
+        conversationId,
+      )
+    ).json()) as { relay: { seats: unknown[]; mine: { telegram: string } } };
+    expect(afterDetail.relay.seats).toEqual([]);
+    expect(afterDetail.relay.mine.telegram).toBe("none");
+    for (const [device, label] of [
+      [customer, "customer"],
+      [projectOwner, "owner"],
+    ] as const) {
+      const sent = await sendVia(device, conversationId, `${label} after relay`);
+      if (sent.status !== 201) {
+        throw new Error(`${label} append refused after remove: ${JSON.stringify(sent.body)}`);
+      }
+    }
+  });
+
   it("renews an expiring policy head so appends outlive the five-minute window", async () => {
     const conversationId = activatedConversationId;
     const [anchorBefore] = await sql`
@@ -1644,7 +1892,7 @@ describeStorage("messaging HTTP surface", () => {
       ).toBe(true);
       const grants = await sql`
         SELECT policy_head_sequence FROM conversation_send_grants
-        WHERE conversation_id = ${conversationId}`;
+        WHERE conversation_id = ${conversationId} AND state = 'active'`;
       expect(grants.length).toBe(3);
       expect(
         grants.every(
@@ -1686,6 +1934,13 @@ describeStorage("messaging HTTP surface", () => {
       await setDeliveryLabClock(sql, NOW);
     }
   });
+
+  function witnessPort() {
+    return {
+      submitChain: (submission: Parameters<typeof core3.extendChain>[1]) =>
+        core3.extendChain("policy", submission),
+    };
+  }
 
   // Appends against the CURRENT head: the detail read carries the etag and
   // policy head the request must cite, both of which change on a re-issue.

@@ -14,6 +14,8 @@ export interface IdentityKeyedCryptoPort {
   readonly hmacRefreshToken: (token: string) => Buffer;
   readonly hmacEligibilityClaimHandle: (handle: string) => Buffer;
   readonly hmacEligibilitySubject: (caip10: string) => Buffer;
+  /** Relay consent grants have no wallet subject: served account + channel. */
+  readonly hmacRelaySubject: (servedAccountId: string, channelKind: string) => Buffer;
   readonly sealPayload: (plaintext: string) => {
     readonly ciphertext: Buffer;
     readonly kmsKeyVersion: string;
@@ -28,6 +30,7 @@ const ACCESS_TOKEN_DOMAIN = "jbm-identity-access-token/v1";
 const REFRESH_TOKEN_DOMAIN = "jbm-identity-refresh-token/v1";
 const ELIGIBILITY_CLAIM_HANDLE_DOMAIN = "jbm-eligibility-claim-handle/v1";
 const ELIGIBILITY_SUBJECT_DOMAIN = "jbm-eligibility-subject/v1";
+const ELIGIBILITY_RELAY_SUBJECT_DOMAIN = "jbm-eligibility-relay-subject/v1";
 const SEAL_KEY_DOMAIN = "jbm-identity-payload-seal-key/v1";
 
 export function createKeyedIdentityCrypto(
@@ -54,6 +57,8 @@ export function createKeyedIdentityCrypto(
       keyed(ELIGIBILITY_CLAIM_HANDLE_DOMAIN, handle),
     hmacEligibilitySubject: (caip10: string) =>
       keyed(ELIGIBILITY_SUBJECT_DOMAIN, caip10),
+    hmacRelaySubject: (servedAccountId: string, channelKind: string) =>
+      keyed(ELIGIBILITY_RELAY_SUBJECT_DOMAIN, `${servedAccountId}\n${channelKind}`),
     sealPayload: (plaintext: string) => {
       const iv = randomBytes(12);
       const cipher = createCipheriv("aes-256-gcm", sealKey, iv);

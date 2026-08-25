@@ -13,6 +13,7 @@ import {
 import {
   acceptConversationRequest,
   canDecrypt,
+  conversationDetail,
   decryptedMessages,
   sendMessage,
   syncWelcomes,
@@ -20,6 +21,7 @@ import {
 } from "@/lib/messaging/conversation";
 import { NotificationsButton } from "./NotificationsPanel";
 import { DevicesButton } from "./DevicesPanel";
+import { RelayButton } from "./RelayPanel";
 import { truncateAddress } from "@/lib/messaging/identity";
 import {
   Avatar,
@@ -792,6 +794,9 @@ function ConversationView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [relaySeats, setRelaySeats] = useState<
+    { installationId: string; role: string; mine: boolean }[]
+  >([]);
 
   const refresh = useCallback(async () => {
     const response = await api(
@@ -811,6 +816,11 @@ function ConversationView({
       );
     }
     setDecryptable(await canDecrypt(conversation.conversationId));
+    try {
+      setRelaySeats((await conversationDetail(conversation.conversationId)).relay?.seats ?? []);
+    } catch {
+      // The transcript stays useful without the roster banner.
+    }
     const decrypted = await decryptedMessages(
       conversation.conversationId,
       body.events,
@@ -857,7 +867,16 @@ function ConversationView({
           {projectName ?? `Project #${conversation.project.projectId}`}
           {conversation.role === "customer" ? " support" : ""}
         </h1>
+        {decryptable ? (
+          <RelayButton conversationId={conversation.conversationId} />
+        ) : null}
       </div>
+      {relaySeats.filter((seat) => !seat.mine).map((seat) => (
+        <p key={seat.installationId} className="mxHint" style={{ margin: 0 }}>
+          {seat.role === "customer" ? "The customer’s" : "The project’s"}{" "}
+          Telegram relay can read this conversation.
+        </p>
+      ))}
       <section
         className="mxCard"
         style={{ padding: "1.25rem", display: "grid", gap: 8 }}
