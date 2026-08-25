@@ -12,6 +12,7 @@ import type { Sql } from "postgres";
 export interface ConversationRequestStoreContext {
   readonly sql: Sql;
   readonly hmacEligibilityClaimHandle: (handle: string) => Buffer;
+  readonly hmacEligibilitySubject: (caip10: string) => Buffer;
   readonly now: () => string;
 }
 
@@ -29,6 +30,7 @@ export interface OwnerQueueItem {
   readonly chainId: string;
   readonly projectId: string;
   readonly requesterAccountId: string;
+  readonly requesterWallet: string | null;
   readonly createdAt: string;
 }
 
@@ -37,6 +39,7 @@ export interface ConversationRequestStore {
     requesterAccountId: string;
     requesterInstallationId: string;
     eligibilityClaimHandle: string;
+    requesterWalletRef?: string;
   }) => Promise<CreateRequestResult>;
   readonly listForOwnerInstallation: (
     installationId: string,
@@ -53,12 +56,13 @@ export function createConversationRequestStore(
       requesterAccountId: string;
       requesterInstallationId: string;
       eligibilityClaimHandle: string;
+      requesterWalletRef?: string;
     }): Promise<CreateRequestResult> {
       const now = context.now();
       return sql.begin(async (tx) => {
         const grants = await tx`
           SELECT grant_id, project_ref_id, account_id, installation_id,
-                 capability, state, valid_until
+                 capability, state, valid_until, subject_hash
           FROM eligibility_grants
           WHERE claim_handle_hash =
                 ${context.hmacEligibilityClaimHandle(input.eligibilityClaimHandle)}
@@ -79,6 +83,19 @@ export function createConversationRequestStore(
         }
         const projectRefId = String(grants[0].project_ref_id);
         const grantId = String(grants[0].grant_id);
+        // The requester's wallet is stored for the owner's queue only when
+        // it HMAC-matches the grant's subject — i.e. it is the wallet that
+        // verifiably paid. A mismatch or absence just stores nothing.
+        let requesterWallet: string | null = null;
+        if (typeof input.requesterWalletRef === "string") {
+          const given = context.hmacEligibilitySubject(
+            input.requesterWalletRef.toLowerCase(),
+          );
+          const expected = Buffer.from(grants[0].subject_hash as Uint8Array);
+          if (given.length === expected.length && given.equals(expected)) {
+            requesterWallet = input.requesterWalletRef.toLowerCase();
+          }
+        }
 
         const requester = await tx`
           SELECT installation_id FROM installations
@@ -124,11 +141,12 @@ export function createConversationRequestStore(
         await tx`
           INSERT INTO conversation_requests (
             request_id, project_ref_id, requester_account_id,
-            requester_installation_id, eligibility_grant_id, status, created_at
+            requester_installation_id, eligibility_grant_id, status,
+            requester_wallet, created_at
           ) VALUES (
             ${requestId}, ${projectRefId}, ${input.requesterAccountId},
             ${input.requesterInstallationId}, ${grantId}, 'pending',
-            ${now}::timestamptz
+            ${requesterWallet}, ${now}::timestamptz
           )`;
         return Object.freeze({
           status: "created" as const,
@@ -143,7 +161,7 @@ export function createConversationRequestStore(
     ): Promise<readonly OwnerQueueItem[]> {
       const rows = await sql`
         SELECT r.request_id, r.project_ref_id, r.requester_account_id,
-               r.created_at, p.chain_id, p.project_id
+               r.requester_wallet, r.created_at, p.chain_id, p.project_id
         FROM project_staff_registrations s
         JOIN conversation_requests r
           ON r.project_ref_id = s.project_ref_id AND r.status = 'pending'
@@ -165,6 +183,8 @@ export function createConversationRequestStore(
         chainId: String(row.chain_id),
         projectId: String(row.project_id),
         requesterAccountId: String(row.requester_account_id),
+        requesterWallet:
+          row.requester_wallet === null ? null : String(row.requester_wallet),
         createdAt: new Date(row.created_at as Date).toISOString(),
       }));
     },

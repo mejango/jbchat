@@ -214,7 +214,10 @@ async function tryRefresh(): Promise<boolean> {
     },
   );
   if (!response.ok) {
-    if (response.status === 401) signOutLocal();
+    if (response.status === 401) {
+      sessionEndReason = "expired";
+      signOutLocal();
+    }
     return false;
   }
   const rotated = (await response.json()) as {
@@ -233,8 +236,43 @@ async function tryRefresh(): Promise<boolean> {
   return true;
 }
 
+let sessionEndReason: "expired" | null = null;
+
+/** Why the last session ended, for enrollment-screen copy. */
+export function sessionEnded(): "expired" | null {
+  return sessionEndReason;
+}
+
 export async function restoreSession(): Promise<void> {
-  await tryRefresh();
+  if (await tryRefresh()) {
+    sessionEndReason = null;
+    // Keep the KeyPackage shelf stocked: each accepted conversation
+    // consumes one, and enrollment only stocked three. Best-effort.
+    void restockKeyPackages().catch(() => undefined);
+  }
+}
+
+const KEY_PACKAGE_SHELF_TARGET = 3;
+
+async function restockKeyPackages(): Promise<void> {
+  const record = await idbGet<KeyRecord>("device");
+  if (!record) return;
+  const shelf = await api(
+    "GET",
+    `/v1/installations/${record.installationId}/key-packages`,
+  );
+  if (!shelf.ok) return;
+  const { available } = (await shelf.json()) as { available: number };
+  if (available >= KEY_PACKAGE_SHELF_TARGET) return;
+  const keyPackages: { keyPackage: string }[] = [];
+  for (let index = available; index < KEY_PACKAGE_SHELF_TARGET; index += 1) {
+    keyPackages.push({ keyPackage: b64url(await generateMlsKeyPackage()) });
+  }
+  await api(
+    "POST",
+    `/v1/installations/${record.installationId}/key-packages`,
+    { keyPackages },
+  );
 }
 
 export function signOutLocal(): void {
@@ -389,6 +427,7 @@ export async function enrollDevice(input: {
     accountId: issued.account.accountId,
   } satisfies KeyRecord);
   accessToken = issued.accessToken;
+  sessionEndReason = null;
   window.localStorage.setItem(REFRESH_KEY, issued.refreshToken);
   window.localStorage.setItem(WALLET_KEY, input.walletAddress.toLowerCase());
   sessionState = {

@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAccount, useSignMessage } from "wagmi";
 import { MessagingProviders } from "@/providers/MessagingProviders";
 import {
   api,
   enrollDevice,
   restoreSession,
+  sessionEnded,
   type EnrollmentProgress,
 } from "@/lib/messaging/client";
 import {
@@ -43,6 +44,34 @@ interface ConversationEvent {
   envelopeClass: string;
   contentType: string;
   envelopeBytes: string;
+}
+
+function relativeTime(iso: string): string {
+  const ms = Date.now() - Date.parse(iso);
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return days < 7 ? `${days}d ago` : new Date(iso).toLocaleDateString();
+}
+
+// Last position the user has SEEN per conversation, kept locally — the
+// server never learns read state. Unread = lastPosition beyond this.
+const SEEN_KEY = "jbm.seenPositions";
+function seenPositions(): Record<string, number> {
+  try {
+    return JSON.parse(window.localStorage.getItem(SEEN_KEY) ?? "{}");
+  } catch {
+    return {};
+  }
+}
+function markSeen(conversationId: string, position: string): void {
+  const seen = seenPositions();
+  seen[conversationId] = Math.max(seen[conversationId] ?? 0, Number(position));
+  window.localStorage.setItem(SEEN_KEY, JSON.stringify(seen));
 }
 
 export function MessagingApp() {
@@ -160,6 +189,12 @@ function EnrollPanel() {
       <h1 className="mxDisplay" style={{ marginTop: 0, fontSize: 22 }}>
         Secure this device
       </h1>
+      {sessionEnded() === "expired" ? (
+        <p style={{ color: "var(--mx-melon)", marginTop: 0 }}>
+          Your session expired — enroll again to keep chatting. Your
+          conversations are safe.
+        </p>
+      ) : null}
       <p style={{ color: "var(--mx-smoke-700)" }}>
         Enrollment creates non-exportable keys in this browser and proves
         wallet control with a one-time signature. The service verifies your
@@ -192,6 +227,10 @@ function Inbox() {
   >(null);
   const [selected, setSelected] = useState<ConversationSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<
+    Record<string, { name: string | null; logoUri: string | null }>
+  >({});
+  const metaFetched = useRef(new Set<string>());
 
   const reload = useCallback(async () => {
     await syncWelcomes().catch(() => undefined);
@@ -205,11 +244,33 @@ function Inbox() {
     };
     setConversations(body.conversations);
     setError(null);
+    // Resolve project names/logos for any rows we have not looked up yet.
+    const keys = body.conversations
+      .map(
+        (conversation) =>
+          `${projectKey(conversation.project.chainId)}:${conversation.project.projectId}`,
+      )
+      .filter((key) => !metaFetched.current.has(key));
+    if (keys.length > 0) {
+      keys.forEach((key) => metaFetched.current.add(key));
+      void fetch(`/api/juicebox/project-meta?keys=${keys.join(",")}`)
+        .then((res) => (res.ok ? res.json() : {}))
+        .then((body: Record<string, { name: string | null; logoUri: string | null }>) =>
+          setMeta((current) => ({ ...current, ...body })),
+        )
+        .catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {
+    // Poll so an accepted chat appears for the waiting customer (the
+    // welcome sync inside reload() joins the MLS group) without a refresh.
     const timer = setTimeout(() => void reload(), 0);
-    return () => clearTimeout(timer);
+    const interval = setInterval(() => void reload(), 20000);
+    return () => {
+      clearTimeout(timer);
+      clearInterval(interval);
+    };
   }, [reload]);
 
   if (selected) {
@@ -252,39 +313,75 @@ function Inbox() {
           </p>
         </section>
       ) : (
-        conversations.map((conversation) => (
-          <button
-            key={conversation.conversationId}
-            className="mxCard mxRow"
-            style={{
-              padding: "1rem",
-              cursor: "pointer",
-              font: "inherit",
-              textAlign: "left",
-              width: "100%",
-            }}
-            onClick={() => setSelected(conversation)}
-          >
-            <Avatar address={conversation.conversationId} size={40} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 500 }}>
-                Project #{conversation.project.projectId} ·{" "}
-                {conversation.project.chainId}
+        conversations.map((conversation) => {
+          const key = projectKey(conversation.project.chainId);
+          const info = meta[`${key}:${conversation.project.projectId}`];
+          const unread =
+            Number(conversation.lastPosition) >
+            (seenPositions()[conversation.conversationId] ?? 0);
+          return (
+            <button
+              key={conversation.conversationId}
+              className="mxCard mxRow"
+              style={{
+                padding: "1rem",
+                cursor: "pointer",
+                font: "inherit",
+                textAlign: "left",
+                width: "100%",
+              }}
+              onClick={() => setSelected(conversation)}
+            >
+              {info?.logoUri ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={info.logoUri}
+                  alt=""
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 8,
+                    objectFit: "cover",
+                  }}
+                />
+              ) : (
+                <Avatar address={conversation.conversationId} size={40} />
+              )}
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: unread ? 700 : 500 }}>
+                  {info?.name ?? `Project #${conversation.project.projectId}`}
+                </div>
+                <div className="mxHint">
+                  {CHAIN_LABEL[conversation.project.chainId] ??
+                    conversation.project.chainId}{" "}
+                  · {conversation.role === "customer" ? "support" : "customer chat"}
+                  {conversation.lastActivityAt
+                    ? ` · ${relativeTime(conversation.lastActivityAt)}`
+                    : ""}
+                </div>
               </div>
-              <div className="mxHint">
-                {conversation.role} ·{" "}
-                {conversation.state === "active"
-                  ? "active"
-                  : conversation.state}{" "}
-                · {conversation.lastPosition} events
-              </div>
-            </div>
-            <span className="mxChip">{conversation.deliveryPurpose}</span>
-          </button>
-        ))
+              {unread ? (
+                <span
+                  className="mxChip"
+                  style={{
+                    background: "var(--mx-melon)",
+                    color: "#fff",
+                  }}
+                >
+                  New
+                </span>
+              ) : null}
+            </button>
+          );
+        })
       )}
     </div>
   );
+}
+
+// "eip155:8453" -> "8453", for project-meta keys.
+function projectKey(chainId: string): string {
+  return chainId.replace(/^eip155:/, "");
 }
 
 
@@ -293,6 +390,7 @@ interface OwnerRequest {
   chainId: string;
   projectId: string;
   requesterAccountId: string;
+  requesterWallet: string | null;
   createdAt: string;
 }
 
@@ -375,7 +473,12 @@ function RequestRow({
           Project #{request.projectId} ·{" "}
           {CHAIN_LABEL[request.chainId] ?? request.chainId}
         </div>
-        <div className="mxHint">A paid customer wants to start a chat.</div>
+        <div className="mxHint">
+          {request.requesterWallet
+            ? `${truncateAddress(request.requesterWallet.split(":")[2] ?? request.requesterWallet)} — a paid customer — wants to start a chat.`
+            : "A paid customer wants to start a chat."}{" "}
+          {relativeTime(request.createdAt)}
+        </div>
       </div>
       <button
         className="mxBtnPrimary"
@@ -479,6 +582,7 @@ function CustomerCard({ project }: { project: CustomerProject }) {
       const { claimHandle } = (await claim.json()) as { claimHandle: string };
       const requested = await api("POST", "/v1/conversation-requests", {
         eligibilityClaimHandle: claimHandle,
+        walletRef: `eip155:${project.chainId}:${address.toLowerCase()}`,
       });
       setState(requested.ok ? "requested" : "error");
     } catch {
@@ -541,6 +645,23 @@ function Discovery() {
     asCustomer: CustomerProject[];
     asOwner: OwnerProject[];
   } | null>(null);
+  // Owned projects auto-register this device as support staff (the server
+  // re-proves ownership on-chain), so the owner sees incoming requests and
+  // can accept without any manual step. Once per project per page load.
+  const staffAttempted = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!data) return;
+    for (const project of data.asOwner) {
+      const key = `${project.chainId}:${project.projectId}`;
+      if (staffAttempted.current.has(key)) continue;
+      staffAttempted.current.add(key);
+      void api("POST", "/v1/staff-registrations", {
+        chainId: project.chainId,
+        projectId: project.projectId,
+      }).catch(() => staffAttempted.current.delete(key));
+    }
+  }, [data]);
 
   useEffect(() => {
     if (!address) return;
@@ -629,6 +750,12 @@ function ConversationView({
     }
     const body = (await response.json()) as { events: ConversationEvent[] };
     setEvents(body.events);
+    if (body.events.length > 0) {
+      markSeen(
+        conversation.conversationId,
+        body.events[body.events.length - 1].position,
+      );
+    }
     setDecryptable(await canDecrypt(conversation.conversationId));
     const decrypted = await decryptedMessages(
       conversation.conversationId,

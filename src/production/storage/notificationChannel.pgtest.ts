@@ -129,8 +129,16 @@ describeStorage("notification channels", () => {
       },
       fetchImpl,
     });
-    await dispatcher.dispatch([ACCOUNT_A], "message");
+    await dispatcher.dispatch([ACCOUNT_A], "message", "conv-1");
     expect(calls).toContain("https://api.resend.com/emails");
     expect(calls).toContain("https://api.telegram.org/bot123:abc/sendMessage");
+
+    // Same scope inside the cooldown window: no second wakeup.
+    const sent = calls.length;
+    await dispatcher.dispatch([ACCOUNT_A], "message", "conv-1");
+    expect(calls.length).toBe(sent);
+    // A different scope still notifies.
+    await dispatcher.dispatch([ACCOUNT_A], "message", "conv-2");
+    expect(calls.length).toBeGreaterThan(sent);
   });
 });

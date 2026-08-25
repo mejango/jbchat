@@ -182,6 +182,11 @@ export interface MessagingHttpHandlers {
     request: Request,
     projectRefId: string,
   ) => Promise<Response>;
+  readonly registerOwnerStaff: (request: Request) => Promise<Response>;
+  readonly readKeyPackageShelf: (
+    request: Request,
+    installationId: string,
+  ) => Promise<Response>;
   readonly publishKeyPackages: (
     request: Request,
     installationId: string,
@@ -371,6 +376,7 @@ export function createMessagingHttpHandlers(
       requests: createConversationRequestStore({
         sql,
         hmacEligibilityClaimHandle: crypto.hmacEligibilityClaimHandle,
+        hmacEligibilitySubject: crypto.hmacEligibilitySubject,
         now: now as never,
       }),
       chainRegistry:
@@ -508,6 +514,76 @@ export function createMessagingHttpHandlers(
       .get("authorization")
       ?.match(/^Enrollment ([A-Za-z0-9_-]{43})$/);
     return match ? match[1] : null;
+  };
+
+  // Quorum-ownerOf ownership proof + staff upsert, shared by the
+  // projectRefId route and the on-demand owner registration.
+  const registerStaffForRef = async (
+    wired: Wired,
+    session: AuthenticatedSession,
+    projectRefId: string,
+  ): Promise<Response> => {
+    if (!wired.chainRegistry) return notFound();
+    const projects = await wired.sql`
+      SELECT chain_id, project_id::text AS project_id,
+             encode(projects_contract, 'hex') AS projects_contract
+      FROM project_refs
+      WHERE project_ref_id = ${projectRefId} AND status = 'active'`;
+    if (projects.length !== 1) return problem(404, "project_unknown");
+    const chainMatch = String(projects[0].chain_id).match(/^eip155:(\d+)$/);
+    if (!chainMatch) return problem(404, "project_unknown");
+    const transports = wired.chainRegistry.transportsFor(
+      Number(chainMatch[1]),
+    );
+    if (!transports) return problem(503, "chain_unavailable");
+
+    // ERC-721 ownerOf(projectId) on the pinned projects contract at the
+    // finalized quorum head proves who may register support staff.
+    const projectIdHex = BigInt(String(projects[0].project_id))
+      .toString(16)
+      .padStart(64, "0");
+    const call = await readCallAtFinalized(
+      transports,
+      2,
+      `0x${String(projects[0].projects_contract)}`,
+      `0x6352211e${projectIdHex}`,
+    );
+    if (call.status !== "ok" || call.returnData.byteLength !== 32) {
+      return problem(503, "chain_unavailable");
+    }
+    const ownerAddress = `0x${call.returnData.subarray(12).toString("hex")}`;
+    const links = await wired.sql`
+      SELECT account_id FROM wallet_links
+      WHERE wallet_ref_lookup = ${wired.crypto.hmacWalletRefLookup(
+        `${String(projects[0].chain_id)}:${ownerAddress}`,
+      )} AND status = 'active'`;
+    if (
+      links.length !== 1 ||
+      String(links[0].account_id) !== session.accountId
+    ) {
+      return problem(403, "not_project_owner");
+    }
+    await wired.sql`
+      INSERT INTO project_staff_registrations (
+        project_ref_id, installation_id, account_id,
+        registered_by_owner_address, ownership_block,
+        ownership_block_hash, state, registered_at
+      ) VALUES (
+        ${projectRefId}, ${session.installationId}, ${session.accountId},
+        ${Buffer.from(ownerAddress.slice(2), "hex")},
+        ${String(call.blockNumber ?? 0n)},
+        ${Buffer.from(
+          String(call.blockHash ?? `0x${"00".repeat(32)}`).slice(2),
+          "hex",
+        )},
+        'active', ${now()}::timestamptz
+      ) ON CONFLICT (project_ref_id, installation_id)
+      DO UPDATE SET state = 'active', revoked_at = NULL`;
+    return jsonNoStore(201, {
+      projectRefId,
+      installationId: session.installationId,
+      ownerAddress,
+    });
   };
 
   return Object.freeze({
@@ -1005,10 +1081,13 @@ export function createMessagingHttpHandlers(
       if (body === undefined) return problem(400, "malformed_request");
       const handle = (body as Record<string, unknown>).eligibilityClaimHandle;
       if (typeof handle !== "string") return problem(400, "malformed_request");
+      const walletRef = (body as Record<string, unknown>).walletRef;
       const result = await wired.requests.createRequest({
         requesterAccountId: session.accountId,
         requesterInstallationId: session.installationId,
         eligibilityClaimHandle: handle,
+        requesterWalletRef:
+          typeof walletRef === "string" ? walletRef : undefined,
       });
       if (result.status === "refused") {
         return problem(
@@ -1328,67 +1407,66 @@ export function createMessagingHttpHandlers(
       if (!UUID_PATTERN.test(projectRefId)) return notFound();
       const session = await authenticate(wired, request);
       if (!session) return problem(401, "session_invalid");
+      return registerStaffForRef(wired, session, projectRefId);
+    },
 
-      const projects = await wired.sql`
-        SELECT chain_id, project_id::text AS project_id,
-               encode(projects_contract, 'hex') AS projects_contract
-        FROM project_refs
-        WHERE project_ref_id = ${projectRefId} AND status = 'active'`;
-      if (projects.length !== 1) return problem(404, "project_unknown");
-      const chainMatch = String(projects[0].chain_id).match(/^eip155:(\d+)$/);
-      if (!chainMatch) return problem(404, "project_unknown");
-      const transports = wired.chainRegistry.transportsFor(
-        Number(chainMatch[1]),
-      );
-      if (!transports) return problem(503, "chain_unavailable");
-
-      // ERC-721 ownerOf(projectId) on the pinned projects contract at the
-      // finalized quorum head proves who may register support staff.
-      const projectIdHex = BigInt(String(projects[0].project_id))
-        .toString(16)
-        .padStart(64, "0");
-      const call = await readCallAtFinalized(
-        transports,
-        2,
-        `0x${String(projects[0].projects_contract)}`,
-        `0x6352211e${projectIdHex}`,
-      );
-      if (call.status !== "ok" || call.returnData.byteLength !== 32) {
-        return problem(503, "chain_unavailable");
-      }
-      const ownerAddress = `0x${call.returnData.subarray(12).toString("hex")}`;
-      const links = await wired.sql`
-        SELECT account_id FROM wallet_links
-        WHERE wallet_ref_lookup = ${wired.crypto.hmacWalletRefLookup(
-          `${String(projects[0].chain_id)}:${ownerAddress}`,
-        )} AND status = 'active'`;
+    async registerOwnerStaff(request: Request): Promise<Response> {
+      // Open, on-demand owner registration: the dashboard knows only
+      // (chainId, projectId) from the indexer. The project_ref is
+      // provisioned exactly like the claim path, and ownership is still
+      // proven by quorum ownerOf inside registerStaffForRef — so this
+      // opens nothing.
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.chainRegistry) return notFound();
+      if (!wired.eligibility || !wired.provisioningSeed) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const record = body as Record<string, unknown>;
       if (
-        links.length !== 1 ||
-        String(links[0].account_id) !== session.accountId
+        typeof record.chainId !== "number" ||
+        !Number.isSafeInteger(record.chainId) ||
+        typeof record.projectId !== "number" ||
+        !Number.isSafeInteger(record.projectId) ||
+        record.projectId < 0
       ) {
-        return problem(403, "not_project_owner");
+        return problem(400, "malformed_request");
       }
-      await wired.sql`
-        INSERT INTO project_staff_registrations (
-          project_ref_id, installation_id, account_id,
-          registered_by_owner_address, ownership_block,
-          ownership_block_hash, state, registered_at
-        ) VALUES (
-          ${projectRefId}, ${session.installationId}, ${session.accountId},
-          ${Buffer.from(ownerAddress.slice(2), "hex")},
-          ${String(call.blockNumber ?? 0n)},
-          ${Buffer.from(
-            String(call.blockHash ?? `0x${"00".repeat(32)}`).slice(2),
-            "hex",
-          )},
-          'active', ${now()}::timestamptz
-        ) ON CONFLICT (project_ref_id, installation_id)
-        DO UPDATE SET state = 'active', revoked_at = NULL`;
-      return jsonNoStore(201, {
-        projectRefId,
-        installationId: session.installationId,
-        ownerAddress,
-      });
+      const contract = wired.eligibility.projectsContractFor(record.chainId);
+      if (!contract) return problem(404, "project_unknown");
+      const projectRefId = await ensureProjectRef(
+        wired.sql,
+        wired.provisioningSeed,
+        now(),
+        {
+          chainId: record.chainId,
+          projectId: record.projectId,
+          projectsContract: contract,
+        },
+      );
+      return registerStaffForRef(wired, session, projectRefId);
+    },
+
+    async readKeyPackageShelf(
+      request: Request,
+      installationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      if (!UUID_PATTERN.test(installationId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      if (session.installationId !== installationId) {
+        return problem(403, "installation_mismatch");
+      }
+      const rows = await wired.sql`
+        SELECT count(*)::int AS available FROM key_packages
+        WHERE installation_id = ${installationId}
+          AND state = 'available' AND taken_at IS NULL
+          AND expires_at > ${now()}::timestamptz`;
+      return jsonNoStore(200, { available: Number(rows[0].available) });
     },
 
     async publishKeyPackages(
@@ -2212,6 +2290,7 @@ async function notifyProjectStaff(
   await wired.dispatcher.dispatch(
     rows.map((row) => String(row.account_id)),
     "request",
+    projectRefId,
   );
 }
 
@@ -2229,6 +2308,7 @@ async function notifyConversationPeers(
   await wired.dispatcher.dispatch(
     rows.map((row) => String(row.account_id)),
     "message",
+    conversationId,
   );
 }
 

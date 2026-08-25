@@ -22,6 +22,7 @@ const CUSTOMER_INSTALLATION_ID = "00000000-0000-4000-8000-00000000d312";
 const OWNER_ACCOUNT_ID = "00000000-0000-4000-8000-00000000d321";
 const OWNER_INSTALLATION_ID = "00000000-0000-4000-8000-00000000d322";
 const CLAIM_HANDLE = randomBytes(32).toString("base64url");
+const WALLET_REF = "eip155:31337:0x5138a42c3d5065debe950debda10c1f38150a908";
 const POLICY_HASH = randomBytes(32);
 const PROFILE_HASH = randomBytes(32);
 
@@ -32,6 +33,7 @@ describeStorage("conversation requests", () => {
     createConversationRequestStore({
       sql,
       hmacEligibilityClaimHandle: crypto.hmacEligibilityClaimHandle,
+      hmacEligibilitySubject: crypto.hmacEligibilitySubject,
       now: () => NOW,
     });
   // The plan store reads the real DB clock (not the injected NOW), so the
@@ -120,7 +122,7 @@ describeStorage("conversation requests", () => {
         ) VALUES (
           ${randomUUID()}, ${PROJECT_REF_ID}, ${CUSTOMER_ACCOUNT_ID},
           ${CUSTOMER_INSTALLATION_ID}, 'purchase-support', ${POLICY_ID}, 1,
-          ${POLICY_HASH}, ${randomBytes(32)},
+          ${POLICY_HASH}, ${crypto.hmacEligibilitySubject(WALLET_REF)},
           ${crypto.hmacEligibilityClaimHandle(CLAIM_HANDLE)},
           ${FINALITY_PROFILE_ID}, 1, ${PROFILE_HASH}, ${randomBytes(32)},
           'eip155:31337', 100, ${randomBytes(32)}, 'verified-finalized',
@@ -148,6 +150,7 @@ describeStorage("conversation requests", () => {
       requesterAccountId: CUSTOMER_ACCOUNT_ID,
       requesterInstallationId: CUSTOMER_INSTALLATION_ID,
       eligibilityClaimHandle: CLAIM_HANDLE,
+      requesterWalletRef: WALLET_REF.toUpperCase().replace("EIP", "eip"),
     });
     expect(created.status).toBe("created");
 
@@ -165,6 +168,9 @@ describeStorage("conversation requests", () => {
     expect(queue.length).toBe(1);
     expect(queue[0].requestId).toBe(created.requestId);
     expect(queue[0].requesterAccountId).toBe(CUSTOMER_ACCOUNT_ID);
+    // The wallet display survives only because it HMAC-matched the grant's
+    // subject (case-normalized).
+    expect(queue[0].requesterWallet).toBe(WALLET_REF);
     expect(queue[0].projectId).toBe("42");
   });
 

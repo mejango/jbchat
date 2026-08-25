@@ -27,8 +27,16 @@ export interface NotificationDispatcher {
   readonly dispatch: (
     accountIds: readonly string[],
     reason: NotifyReason,
+    /** Scope for the cooldown, e.g. the conversation or project id. */
+    dedupeKey?: string,
   ) => Promise<void>;
 }
+
+// One wakeup per (scope, recipient) per window: a burst chat must not
+// become an email per message. ponytail: in-memory cooldown — a restart or
+// second instance just means one extra wakeup, which is harmless for a
+// best-effort channel; move to a table if instances multiply.
+const COOLDOWN_MS = 15 * 60 * 1000;
 
 function copyFor(
   reason: NotifyReason,
@@ -53,13 +61,28 @@ export function createNotificationDispatcher(context: {
 }): NotificationDispatcher {
   const { sql, config } = context;
   const fetchImpl = context.fetchImpl ?? globalThis.fetch;
+  const lastSentAt = new Map<string, number>();
 
   return Object.freeze({
     async dispatch(
       accountIds: readonly string[],
       reason: NotifyReason,
+      dedupeKey?: string,
     ): Promise<void> {
-      const unique = [...new Set(accountIds)].filter(Boolean);
+      const nowMs = Date.now();
+      const unique = [...new Set(accountIds)].filter(Boolean).filter((id) => {
+        if (!dedupeKey) return true;
+        const key = `${dedupeKey}:${id}`;
+        const last = lastSentAt.get(key) ?? 0;
+        if (nowMs - last < COOLDOWN_MS) return false;
+        lastSentAt.set(key, nowMs);
+        return true;
+      });
+      if (lastSentAt.size > 10_000) {
+        for (const [key, at] of lastSentAt) {
+          if (nowMs - at >= COOLDOWN_MS) lastSentAt.delete(key);
+        }
+      }
       if (unique.length === 0) return;
       if (!config.email && !config.telegram) return;
 

@@ -11,3 +11,10 @@ export async function POST(
 ): Promise<Response> {
   return handlers.publishKeyPackages(request, (await params).installationId);
 }
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ installationId: string }> },
+): Promise<Response> {
+  return handlers.readKeyPackageShelf(request, (await params).installationId);
+}

@@ -138,6 +138,24 @@ export class BendystrawDiscoveryAdapter {
     return { asCustomer, asOwner };
   }
 
+  /** Public name/logo lookup for arbitrary (chainId, projectId) pairs. */
+  async projectMeta(
+    items: { chainId: number; projectId: number }[],
+  ): Promise<
+    Record<string, { name: string | null; logoUri: string | null }>
+  > {
+    const meta = await this.#resolveMeta(
+      this.#config.endpoints.mainnet,
+      items.slice(0, MAX_PROJECTS),
+    );
+    const out: Record<string, { name: string | null; logoUri: string | null }> =
+      {};
+    for (const [key, value] of meta) {
+      out[key] = { name: value.name, logoUri: value.logoUri };
+    }
+    return out;
+  }
+
   async #resolveMeta(
     endpoint: string,
     items: { chainId: number; projectId: number }[],
