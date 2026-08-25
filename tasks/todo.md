@@ -358,7 +358,7 @@ human sign-off gate.
 - [x] Wire provisioningSeed/proposals in messagingHttp.ts
 - [x] Tests: LAB restore helper, existing add-lifecycle suites, third-member acceptance suite
 - [x] npm run check; storage lab green (run 6, 7)
-- [ ] railway up; memory update
+- [x] railway up; memory update
 
 ### Review
 - consumeCommit never rewrote conversations.etag (latent: any append after a membership Commit failed conversation-state-invalid) — fixed.
