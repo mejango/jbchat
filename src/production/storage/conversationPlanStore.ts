@@ -1,12 +1,10 @@
 import { Buffer } from "node:buffer";
-import { createHash, createHmac, randomUUID, sign as signNode, createPrivateKey, createPublicKey } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 import type { Sql, TransactionSql } from "postgres";
 import {
   computeApplicationAppendMlsRosterHash,
   computeApplicationAppendQuotaPolicyDigest,
-  computeApplicationAppendQuotaScopeHash,
   computeApplicationAppendRecipientSetHash,
-  computeConversationSendGrantEvidenceDigest,
   computeDeliveryLimitsDigest,
 } from "../delivery/state";
 import {
@@ -18,9 +16,15 @@ import {
   type DeliveryLogCheckpointInput,
 } from "../delivery/hashes";
 import { ZERO_HASH32 } from "../delivery/valueObjects";
-import { createPolicyHeadIssuanceStore } from "./policyHeadIssuanceStore";
-import { leafHash as merkleLeafHash, merkleRoot } from "../witness/merkleLog";
-import type { PolicyHeadSignerPort } from "../delivery/policyHeadIssuance";
+import {
+  SERVICE_REALM_ID,
+  SERVICE_TENANT_ID,
+  authorityDerivations,
+  b64ToUrl,
+  issueConversationPolicyHead,
+  provisionProjectMessaging,
+  quotaBindingsFor,
+} from "./appendAuthority";
 import type { ExternalProposalSigningPort } from "./externalProposalStore";
 import {
   insertPageEndProjectionFromRows,
@@ -28,8 +32,6 @@ import {
 } from "./postgresDeliveryStore";
 
 const PLAN_TTL_MILLISECONDS = 10 * 60 * 1_000;
-const SERVICE_TENANT_ID = "00000000-0000-4000-8000-00000000a001";
-const SERVICE_REALM_ID = "00000000-0000-4000-8000-00000000a002";
 const RELEASE_PROFILE_ID = "delivery-v1-2026q3";
 const COMMIT_CONTENT_TYPE =
   "application/vnd.juicebox.messaging.mls-public-message";
@@ -137,35 +139,8 @@ export function createConversationPlanStore(
     return new Date(rows[0].db_now as Date).toISOString();
   };
 
-  const deriveSeed = (purpose: string, scope: string): Buffer =>
-    createHmac("sha256", context.provisioningSeed)
-      .update(`${purpose}\n${scope}`, "utf8")
-      .digest();
-
-  const ed25519 = (seed: Buffer) => {
-    const privateKey = createPrivateKey({
-      key: Buffer.concat([
-        Buffer.from("302e020100300506032b657004220420", "hex"),
-        seed,
-      ]),
-      format: "der",
-      type: "pkcs8",
-    });
-    const publicRaw = Buffer.from(
-      createPublicKey(privateKey).export({ format: "jwk" }).x as string,
-      "base64url",
-    );
-    return { privateKey, publicRaw };
-  };
-
-  const stableUuid = (purpose: string, scope: string): string => {
-    const bytes = deriveSeed(`uuid:${purpose}`, scope).subarray(0, 16);
-    const copy = Buffer.from(bytes);
-    copy[6] = (copy[6] & 0x0f) | 0x40;
-    copy[8] = (copy[8] & 0x3f) | 0x80;
-    const hex = copy.toString("hex");
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-  };
+  const { deriveSeed, roleCredentialId } =
+    authorityDerivations(context.provisioningSeed);
 
   /** Lazily provisions the service tenant/realm and release profile. */
   const provisionServiceScope = async (tx: TransactionSql, now: string) => {
@@ -200,139 +175,11 @@ export function createConversationPlanStore(
     };
   };
 
-  /** Lazily provisions per-project signing material and checkpoints. */
-  const provisionProject = async (
+  const provisionProject = (
     tx: TransactionSql,
     projectRefId: string,
     now: string,
-  ) => {
-    const existing = await tx`
-      SELECT * FROM project_messaging_provisions
-      WHERE project_ref_id = ${projectRefId}`;
-    if (existing.length === 1) return existing[0];
-
-    const policyId = stableUuid("policy", projectRefId);
-    await tx`
-      INSERT INTO policies (
-        policy_id, policy_revision, project_ref_id, canonical_document,
-        policy_hash, created_at
-      ) VALUES (
-        ${policyId}, 1, ${projectRefId},
-        ${JSON.stringify({ profile: "project-support-standard-v1" })}::jsonb,
-        ${deriveSeed("policy-hash", projectRefId)}, ${now}::timestamptz
-      ) ON CONFLICT DO NOTHING`;
-    const policyLogCheckpointId = stableUuid("policy-log-checkpoint", projectRefId);
-    await tx`
-      INSERT INTO policy_log_checkpoints (
-        checkpoint_id, tree_size, root_hash, signer_key_id, signature,
-        witness_key_id, witness_signature, created_at
-      ) VALUES (
-        ${policyLogCheckpointId}, 0, ${Buffer.alloc(32)},
-        'jbm-policy-log-unwitnessed', ${Buffer.alloc(1)},
-        'jbm-witness-pending', ${Buffer.alloc(1)}, ${now}::timestamptz
-      ) ON CONFLICT DO NOTHING`;
-    const directoryCheckpointId = stableUuid("directory-checkpoint", projectRefId);
-    await tx`
-      INSERT INTO directory_checkpoints (
-        checkpoint_id, tree_size, root_hash, signer_key_id, signature,
-        created_at
-      ) VALUES (
-        ${directoryCheckpointId}, 0, ${Buffer.alloc(32)},
-        'jbm-directory-unwitnessed', ${Buffer.alloc(1)}, ${now}::timestamptz
-      ) ON CONFLICT DO NOTHING`;
-
-    const currentSenderId = stableUuid("external-sender-current", projectRefId);
-    const stagedSenderId = stableUuid("external-sender-staged", projectRefId);
-    for (const [senderId, generation, purpose] of [
-      [currentSenderId, 1, "external-sender-current"],
-      [stagedSenderId, 2, "external-sender-staged"],
-    ] as const) {
-      const keys = ed25519(deriveSeed(purpose, projectRefId));
-      await tx`
-        INSERT INTO external_sender_credentials (
-          external_sender_credential_id, project_ref_id, signer_generation,
-          credential_public, credential_fingerprint, not_before, expires_at,
-          created_checkpoint_id, witnessed_at, lifecycle_state
-        ) VALUES (
-          ${senderId}, ${projectRefId}, ${generation}, ${keys.publicRaw},
-          ${createHash("sha256")
-            .update("jb-msg-external-sender-fingerprint/v1", "utf8")
-            .update(keys.publicRaw)
-            .digest()},
-          ${now}::timestamptz, ${now}::timestamptz + interval '89 days',
-          ${policyLogCheckpointId}, ${now}::timestamptz, 'published'
-        ) ON CONFLICT DO NOTHING`;
-    }
-
-    // An earlier suite or deployment may already hold this project's
-    // generation slots (UNIQUE(project_ref_id, signer_generation)); adopt
-    // whatever credential actually occupies each generation.
-    const adopted = await tx`
-      SELECT external_sender_credential_id, signer_generation
-      FROM external_sender_credentials
-      WHERE project_ref_id = ${projectRefId}
-        AND signer_generation IN (1, 2)`;
-    const adoptedByGeneration = new Map(
-      adopted.map((row) => [
-        Number(row.signer_generation),
-        String(row.external_sender_credential_id),
-      ]),
-    );
-    const effectiveCurrentId = adoptedByGeneration.get(1) ?? currentSenderId;
-    const effectiveStagedId = adoptedByGeneration.get(2) ?? stagedSenderId;
-
-    // The FULL project ref keeps the key id globally unique — an 8-char
-    // prefix collides across projects sharing a uuid prefix, and the
-    // second project would silently adopt the first's key via the
-    // ON CONFLICT DO NOTHING below. Already-provisioned projects keep
-    // their stored id: issuance reads it from the provision row.
-    const signingKeyId = `jbm-policy-head-${projectRefId}`;
-    const headKeys = ed25519(deriveSeed("policy-head-signer", projectRefId));
-    await tx`
-      INSERT INTO policy_head_signing_keys (
-        policy_head_signing_key_id, project_ref_id, public_key,
-        key_fingerprint, not_before, expires_at, lifecycle_state,
-        policy_checkpoint_id
-      ) VALUES (
-        ${signingKeyId}, ${projectRefId}, ${headKeys.publicRaw},
-        ${createHash("sha256")
-          .update("jb-msg-policy-head-key-fingerprint/v1", "utf8")
-          .update(headKeys.publicRaw)
-          .digest()},
-        ${now}::timestamptz, ${now}::timestamptz + interval '365 days',
-        'active', ${policyLogCheckpointId}
-      ) ON CONFLICT DO NOTHING`;
-
-    await tx`
-      INSERT INTO project_messaging_provisions (
-        project_ref_id, policy_id, policy_revision, policy_log_checkpoint_id,
-        directory_checkpoint_id, current_external_sender_credential_id,
-        staged_external_sender_credential_id, policy_head_signing_key_id,
-        provisioned_at
-      ) VALUES (
-        ${projectRefId}, ${policyId}, 1, ${policyLogCheckpointId},
-        ${directoryCheckpointId}, ${effectiveCurrentId}, ${effectiveStagedId},
-        ${signingKeyId}, ${now}::timestamptz
-      )`;
-    const rows = await tx`
-      SELECT * FROM project_messaging_provisions
-      WHERE project_ref_id = ${projectRefId}`;
-    return rows[0];
-  };
-
-  // The signer id comes from the PROVISION row, never recomputed — an
-  // already-provisioned project keeps whatever id it was provisioned
-  // under (the pre-fix 8-char form included).
-  const policyHeadSignerFor = (
-    projectRefId: string,
-    signerKeyId: string,
-  ): PolicyHeadSignerPort => {
-    const keys = ed25519(deriveSeed("policy-head-signer", projectRefId));
-    return Object.freeze({
-      signerKeyId,
-      sign: (digest: Buffer) => signNode(null, digest, keys.privateKey),
-    });
-  };
+  ) => provisionProjectMessaging(tx, context.provisioningSeed, projectRefId, now);
 
   // The role-agnostic plan body shared by the customer-initiated
   // createPlan (creator = customer, welcome = staff) and the
@@ -1210,250 +1057,45 @@ export function createConversationPlanStore(
               'active', ${ordinal}
             )`;
         }
-
-        // Issued signed policy head + its append-lane anchor.
-        const issuance = createPolicyHeadIssuanceStore({
-          sql: tx as unknown as Sql,
-          signer: policyHeadSignerFor(
-            projectRefId,
-            String(provision.policy_head_signing_key_id),
-          ),
-        });
-        const currentSender = await tx`
-          SELECT encode(credential_fingerprint, 'base64') AS fp,
-                 signer_generation
-          FROM external_sender_credentials
-          WHERE external_sender_credential_id =
-                ${String(provision.current_external_sender_credential_id)}`;
-        // EVERY member gets a send grant with its REAL evidence digest
-        // over the exact row values the reconstruction re-reads, so every
-        // member has a per-sender custody fence and can append. Genesis
-        // grants anchor to the zero prior head: the digests must exist
-        // BEFORE the head that carries them is signed.
+        // Issued signed policy head + its append-lane anchor, the global
+        // policy-log leaf/checkpoint and one send grant per member: the
+        // same graph the membership-Add commit re-issues (appendAuthority).
         const creatorRosterMember = rosterCanonical.find(
           (member) => member.bootstrapMode === "creator",
         )!;
-        const issuedSequence = "1";
-        const memberGrants = rosterCanonical.map((member) => {
-          const credentialId = roleCredentialId(
-            member.installationId,
-            conversationId,
-          );
-          const grantWithoutDigests = {
-            conversationId,
-            installationId: member.installationId,
-            credentialId,
-            conversationKind: "purchase_support",
-            conversationGeneration: generation,
-            role: member.role,
-            roleCredentialId: credentialId,
-            roleCredentialFingerprint: member.credentialFingerprint,
-            roleCredentialSubjectAccountId: member.accountId,
-            roleCredentialSubjectInstallationId: member.installationId,
-            roleCredentialValidFrom: now,
-            roleCredentialValidUntil: credentialExpiry,
-            capability: "send_application",
-            state: "active",
-            policyRevision: "1",
-            policyHeadSequence: issuedSequence,
-            policyHeadHash: ZERO_HASH32,
-            expiresAt: credentialExpiry,
-          };
-          return {
-            member,
-            credentialId,
-            grantWithoutDigests,
-            grantEvidenceDigest: computeConversationSendGrantEvidenceDigest(
-              grantWithoutDigests as never,
-            ),
-            grantInclusionEvidenceDigest: deriveSeed(
-              "send-grant-inclusion",
-              `${conversationId}:${member.installationId}`,
-            ).toString("base64url"),
-          };
-        });
-        const creatorGrant = memberGrants.find(
-          (grant) => grant.member.bootstrapMode === "creator",
-        )!;
-        const sendGrantSetMembers = memberGrants.map((grant) => ({
-          grantEvidenceDigest: grant.grantEvidenceDigest,
-          grantInclusionEvidenceDigest: grant.grantInclusionEvidenceDigest,
-          installationId: grant.member.installationId,
-          credentialId: grant.credentialId,
-          role: grant.member.role,
-        }));
-        const issued = await issuance.issuePolicyHead({
+        const issuedHead = await issueConversationPolicyHead(tx, {
+          provisioningSeed: context.provisioningSeed,
           conversationId,
-          policyId: String(provision.policy_id),
-          policyRevision: "1",
-          policyHash: deriveSeed("policy-hash", projectRefId).toString(
-            "base64url",
-          ),
-          authorizedQuotaPolicyDigest: Buffer.from(
-            plan.quota_policy_digest as Uint8Array,
-          ).toString("base64url"),
-          evaluatedChainId: await projectChainId(tx, projectRefId),
-          evaluatedBlock: "0",
-          evaluatedBlockHash: deriveSeed(
-            "evaluated-block",
-            conversationId,
-          ).toString("base64url"),
-          activeExternalSenderCredentialId: String(
-            provision.current_external_sender_credential_id,
-          ),
-          activeExternalSenderFingerprint: b64ToUrl(
-            String(currentSender[0].fp),
-          ),
-          activeSignerGeneration: String(currentSender[0].signer_generation),
-          directoryCheckpointId: String(provision.directory_checkpoint_id),
-          policyLogCheckpointId: String(provision.policy_log_checkpoint_id),
-          mandatoryProposals: [],
-          sendGrantSetMembers,
+          projectRefId,
+          provision,
+          conversationKind: "purchase_support",
+          conversationGeneration: generation,
+          quotaPolicyDigest: plan.quota_policy_digest as Buffer,
+          grants: rosterCanonical.map((member) => ({
+            installationId: member.installationId,
+            accountId: member.accountId,
+            credentialId: roleCredentialId(member.installationId, conversationId),
+            role: member.role,
+            credentialFingerprint: member.credentialFingerprint,
+            validFrom: now,
+            validUntil: credentialExpiry,
+            expiresAt: credentialExpiry,
+          })),
+          selectedInstallationId: creatorRosterMember.installationId,
+          anchor: {
+            mode: "insert",
+            confirmedTranscriptHash: resultingTranscript,
+          },
+          now,
         });
-        // Re-anchor every grant at the issued head. The grant digest
-        // commits the head hash, and the head's signed body committed the
-        // genesis zero-anchored digests - the bootstrap order the kernel
-        // admits: rows carry the post-issuance digests the append path
-        // recomputes.
-        for (const grant of memberGrants) {
-          grant.grantEvidenceDigest = computeConversationSendGrantEvidenceDigest(
-            {
-              ...grant.grantWithoutDigests,
-              policyHeadHash: issued.policyHeadHash,
-            } as never,
-          );
-        }
-        const served = await issuance.readNewestPolicyHead(conversationId);
-        if (!served) {
+        if (issuedHead.status !== "issued") {
           return Object.freeze({
             status: "refused" as const,
             reasonCode: "policy_head_unavailable",
           });
         }
-        const signedBodySha = createHash("sha256")
-          .update(Buffer.from(served.canonicalSignedBody, "base64url"))
-          .digest();
-        const headExpiry = served.expiresAt;
-        await tx`
-          INSERT INTO delivery_policy_head_anchors (
-            conversation_id, policy_head_id, policy_head_sequence,
-            policy_head_hash, delivery_log_position, delivery_log_head_hash,
-            evaluation_log_position, evaluation_log_head_hash, epoch,
-            roster_version, confirmed_transcript_hash, policy_revision,
-            signed_body_sha256, signer_key_id, signature_sha256,
-            witness_evidence_digest, proof_evidence_digest,
-            policy_consistency_evidence_digest, proof_verified_at, issued_at,
-            expires_at, witness_state, witness_checkpoint_id,
-            witnessed_policy_head_hash, mandatory_proposal_count,
-            mandatory_proposal_set_hash, authorized_send_grant_set_hash,
-            selected_send_grant_evidence_digest,
-            selected_send_grant_inclusion_evidence_digest,
-            authorized_quota_policy_digest, prior_policy_head_sequence,
-            prior_policy_head_hash, prior_policy_witness_checkpoint_id,
-            prior_policy_witness_evidence_digest, updated_at
-          ) VALUES (
-            ${conversationId}, ${issued.policyHeadId},
-            ${issued.policyHeadSequence},
-            ${Buffer.from(issued.policyHeadHash, "base64url")}, 0,
-            ${Buffer.alloc(32)}, 0, ${Buffer.alloc(32)}, 1, 0,
-            ${Buffer.from(resultingTranscript, "base64url")}, 1,
-            ${signedBodySha}, ${served.signerKeyId},
-            ${createHash("sha256")
-              .update(Buffer.from(served.signature, "base64url"))
-              .digest()},
-            ${deriveSeed("witness-evidence", conversationId)},
-            ${deriveSeed("proof-evidence", conversationId)},
-            ${deriveSeed("policy-consistency", conversationId)},
-            ${now}::timestamptz, ${issued.issuedAt}::timestamptz,
-            ${headExpiry}::timestamptz, 'missing', ${null}, ${null},
-            0, ${zeroSetHash("jb-msg-policy-mandatory-proposal-set/v1")},
-            ${zeroSetHash("jb-msg-send-grant-set/v1")},
-            ${Buffer.from(creatorGrant.grantEvidenceDigest, "base64url")},
-            ${Buffer.from(creatorGrant.grantInclusionEvidenceDigest, "base64url")},
-            ${plan.quota_policy_digest as Buffer},
-            ${issued.policyHeadSequence === "1" ? 0 : Number(issued.policyHeadSequence) - 1},
-            ${
-              issued.previousPolicyHeadHash === ZERO_HASH32
-                ? Buffer.alloc(32)
-                : Buffer.from(issued.previousPolicyHeadHash, "base64url")
-            },
-            ${stableUuid("prior-witness-checkpoint", conversationId)},
-            ${deriveSeed("prior-witness", conversationId)},
-            ${now}::timestamptz
-          )`;
-
-        // Global policy log: this head becomes a leaf, and a checkpoint
-        // commits the RFC 6962 root over the whole prefix. The keeper
-        // submits unwitnessed checkpoints to the witness's policy
-        // namespace; heads stay witness_state='missing' - and appends
-        // stay closed - until the cosigned receipt lands.
-        const leafCountRows = await tx`
-          SELECT count(*)::int AS total FROM policy_log_leaves`;
-        const leafIndex = Number(leafCountRows[0].total);
-        await tx`
-          INSERT INTO policy_log_leaves (
-            leaf_index, policy_head_id, head_hash, created_at
-          ) VALUES (
-            ${leafIndex}, ${issued.policyHeadId},
-            ${Buffer.from(issued.policyHeadHash, "base64url")},
-            ${now}::timestamptz
-          )`;
-        const allLeaves = await tx`
-          SELECT head_hash FROM policy_log_leaves ORDER BY leaf_index`;
-        const policyRoot = merkleRoot(
-          allLeaves.map((row) =>
-            merkleLeafHash(Buffer.from(row.head_hash as Uint8Array)),
-          ),
-        );
-        const previousCheckpoint = await tx`
-          SELECT checkpoint_id FROM policy_log_checkpoints
-          WHERE tree_size > 0 AND signer_key_id = 'jbm-policy-log-2026q3'
-          ORDER BY tree_size DESC LIMIT 1`;
-        const policyLogKeys = ed25519(deriveSeed("policy-log-signer", "global"));
-        await tx`
-          INSERT INTO policy_log_checkpoints (
-            checkpoint_id, tree_size, root_hash, previous_checkpoint_id,
-            signer_key_id, signature, witness_key_id, witness_signature,
-            created_at
-          ) VALUES (
-            ${randomUUID()}, ${leafIndex + 1}, ${policyRoot},
-            ${previousCheckpoint.length === 1
-              ? String(previousCheckpoint[0].checkpoint_id)
-              : null},
-            'jbm-policy-log-2026q3',
-            ${signNode(null, policyRoot, policyLogKeys.privateKey)},
-            'jbm-witness-pending', ${Buffer.alloc(1)}, ${now}::timestamptz
-          )`;
-
-        // Send grants for every member; each column mirrors the
-        // digest-covered values exactly.
+        const issued = issuedHead;
         const creatorMember = creatorRosterMember;
-        for (const grant of memberGrants) {
-          await tx`
-            INSERT INTO conversation_send_grants (
-              conversation_id, installation_id, credential_id,
-              conversation_kind, conversation_generation, role,
-              role_credential_id, role_credential_fingerprint,
-              role_credential_subject_account_id,
-              role_credential_subject_installation_id,
-              role_credential_valid_from, role_credential_valid_until,
-              capability, state, policy_revision, policy_head_sequence,
-              policy_head_hash, expires_at, grant_evidence_digest,
-              grant_inclusion_evidence_digest
-            ) VALUES (
-              ${conversationId}, ${grant.member.installationId},
-              ${grant.credentialId}, 'purchase_support', ${generation},
-              ${grant.member.role}, ${grant.credentialId},
-              ${Buffer.from(grant.member.credentialFingerprint, "base64url")},
-              ${grant.member.accountId}, ${grant.member.installationId},
-              ${now}::timestamptz, ${credentialExpiry}::timestamptz,
-              'send_application', 'active', 1, ${issuedSequence},
-              ${Buffer.from(issued.policyHeadHash, "base64url")},
-              ${credentialExpiry}::timestamptz,
-              ${Buffer.from(grant.grantEvidenceDigest, "base64url")},
-              ${Buffer.from(grant.grantInclusionEvidenceDigest, "base64url")}
-            )`;
-        }
 
         // The position-one Commit envelope, chained and signed.
         const envelopeId = String(mls.envelopeId);
@@ -1609,55 +1251,6 @@ export function createConversationPlanStore(
     },
   });
 
-  function roleCredentialId(installationId: string, conversationId: string): string {
-    return stableUuid("role-credential", `${conversationId}:${installationId}`);
-  }
-
-  async function projectChainId(
-    tx: TransactionSql,
-    projectRefId: string,
-  ): Promise<string> {
-    const rows = await tx`
-      SELECT chain_id FROM project_refs WHERE project_ref_id = ${projectRefId}`;
-    return String(rows[0].chain_id);
-  }
-}
-
-function quotaBindingsFor(
-  conversationId: string,
-  accountId: string,
-  installationId: string,
-  projectRefId: string,
-  windowStartedAt: string,
-) {
-  const windowStart = new Date(
-    Math.floor(Date.parse(windowStartedAt) / 86_400_000) * 86_400_000,
-  ).toISOString();
-  // Subjects must equal the conversation row's locked scope IDs exactly
-  // (state.ts quotaSubjectId): project/tenant use the prefixed scope form.
-  const subjects = {
-    installation: installationId,
-    account: accountId,
-    project: `project:${projectRefId}`,
-    conversation: conversationId,
-    tenant: `tenant:${SERVICE_TENANT_ID}`,
-  } as const;
-  return (
-    ["installation", "account", "project", "conversation", "tenant"] as const
-  ).map((scope) => ({
-    scope,
-    scopeHash: computeApplicationAppendQuotaScopeHash({
-      realmId: SERVICE_REALM_ID,
-      scope,
-      subjectId: subjects[scope],
-    }),
-    subjectId: subjects[scope],
-    quotaName: "application-append",
-    windowStartedAt: windowStart,
-    windowSeconds: "86400",
-    operationLimit: "1000",
-    byteLimit: "1048576",
-  }));
 }
 
 /** The deployment trust context every activation-created conversation
@@ -1673,14 +1266,4 @@ export function serviceTrustContext(provisioningSeed: Buffer) {
     deliveryLimitsDigest: computeDeliveryLimitsDigest(DELIVERY_LIMITS as never),
     deliveryLimits: DELIVERY_LIMITS,
   });
-}
-
-function zeroSetHash(domain: string): Buffer {
-  return createHash("sha256").update(domain, "utf8").digest();
-}
-
-function b64ToUrl(value: unknown): string {
-  return Buffer.from(String(value).replace(/\s/g, ""), "base64").toString(
-    "base64url",
-  );
 }

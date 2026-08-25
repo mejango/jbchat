@@ -3,10 +3,21 @@ import { randomBytes } from "node:crypto";
 import type { Sql, TransactionSql } from "postgres";
 import { computeApplicationAppendMlsRosterHash } from "../delivery/state";
 import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
+import { authorityDerivations, readProjectProvision } from "./appendAuthority";
 
 const INTENT_TTL_MILLISECONDS = 5 * 60 * 1_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const ROLE_CREDENTIAL_TTL_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
+// The conversation role an eligibility capability admits under each
+// purpose. Only purchase_support has a production admission flow; every
+// other pairing refuses rather than guessing a role.
+const CAPABILITY_ROLES: Record<string, Record<string, string>> = {
+  purchase_support: {
+    "purchase-support": "customer",
+    "project-staff": "project-staff",
+  },
+};
 const SEND_ROLES: Record<string, readonly string[]> = {
   purchase_support: ["customer", "project-staff"],
   community: ["member", "moderator"],
@@ -15,6 +26,8 @@ const SEND_ROLES: Record<string, readonly string[]> = {
 
 export interface MembershipIntentStoreContext {
   readonly sql: Sql;
+  /** Derives the deterministic role-credential id for an added member. */
+  readonly provisioningSeed: Buffer;
 }
 
 export type MembershipIntentCreation =
@@ -31,6 +44,8 @@ export type MembershipIntentCreation =
         readonly keyPackage: string;
       } | null;
       readonly authorizedCommitterInstallationIds: readonly string[];
+      /** The target's conversation role credential the Commit must bind. */
+      readonly targetCredentialId: string | null;
       readonly expiresAt: string;
     }
   | { readonly status: "conflict"; readonly reasonCode: "membership_intent_conflict" }
@@ -42,6 +57,8 @@ export type MembershipIntentCreation =
         | "grant-invalid"
         | "target-not-enrolled"
         | "target-credential-missing"
+        | "target-role-unresolvable"
+        | "project-not-provisioned"
         | "target-not-a-member"
         | "key-package-unavailable"
         | "malformed-request";
@@ -82,6 +99,63 @@ export function createMembershipIntentStore(
   context: MembershipIntentStoreContext,
 ): MembershipIntentStore {
   const { sql } = context;
+  const { roleCredentialId } = authorityDerivations(context.provisioningSeed);
+
+  type Refusal = Extract<MembershipIntentCreation, { status: "refused" }>;
+  async function issueTargetRoleCredential(
+    tx: TransactionSql,
+    input: {
+      conversationId: string;
+      purpose: string;
+      projectRefId: string;
+      targetInstallationId: string;
+      targetAccountId: string;
+      targetFingerprint: unknown;
+      grantCapability: string;
+      now: string;
+    },
+  ): Promise<{ status: "ok" } | { status: "refused"; refusal: Refusal }> {
+    const refuse = (reasonCode: Refusal["reasonCode"]) =>
+      Object.freeze({
+        status: "refused" as const,
+        refusal: Object.freeze({ status: "refused" as const, reasonCode }),
+      });
+    const existing = await tx`
+      SELECT 1 FROM role_credentials
+      WHERE conversation_id = ${input.conversationId}
+        AND installation_id = ${input.targetInstallationId}
+        AND state = 'active'
+        AND expires_at > ${input.now}::timestamptz`;
+    if (existing.length > 0) return Object.freeze({ status: "ok" as const });
+    const role = CAPABILITY_ROLES[input.purpose]?.[input.grantCapability];
+    if (role === undefined) return refuse("target-role-unresolvable");
+    if (
+      typeof input.targetFingerprint !== "string" ||
+      Buffer.from(input.targetFingerprint, "base64").length !== 32
+    ) {
+      return refuse("target-credential-missing");
+    }
+    const provision = await readProjectProvision(tx, input.projectRefId);
+    if (!provision) return refuse("project-not-provisioned");
+    const fingerprint = Buffer.from(input.targetFingerprint, "base64");
+    const expiresAt = new Date(
+      Date.parse(input.now) + ROLE_CREDENTIAL_TTL_MILLISECONDS,
+    ).toISOString();
+    await tx`
+      INSERT INTO role_credentials (
+        credential_id, conversation_id, installation_id, account_id,
+        policy_id, policy_revision, role, credential_public,
+        credential_fingerprint, issued_at, expires_at, revocation_version,
+        state
+      ) VALUES (
+        ${roleCredentialId(input.targetInstallationId, input.conversationId)},
+        ${input.conversationId}, ${input.targetInstallationId},
+        ${input.targetAccountId}, ${String(provision.policy_id)}, 1, ${role},
+        ${fingerprint}, ${fingerprint}, ${input.now}::timestamptz,
+        ${expiresAt}::timestamptz, 1, 'active'
+      )`;
+    return Object.freeze({ status: "ok" as const });
+  }
 
   const dbNow = async (tx: TransactionSql): Promise<string> => {
     const rows = await tx`SELECT delivery_db_now() AS db_now`;
@@ -149,7 +223,7 @@ export function createMembershipIntentStore(
         const now = await dbNow(tx);
         const conversations = await tx`
           SELECT delivery_purpose, state, epoch, roster_version,
-                 confirmed_transcript_hash, generation
+                 confirmed_transcript_hash, generation, project_ref_id
           FROM conversations
           WHERE conversation_id = ${conversationId}
           FOR UPDATE`;
@@ -183,7 +257,9 @@ export function createMembershipIntentStore(
         const purpose = String(conversation.delivery_purpose);
 
         const targets = await tx`
-          SELECT account_id, status FROM installations
+          SELECT account_id, status,
+                 encode(mls_credential_fingerprint, 'base64') AS fingerprint
+          FROM installations
           WHERE installation_id = ${targetInstallationId}`;
         if (targets.length !== 1 || String(targets[0].status) !== "active") {
           return Object.freeze({
@@ -193,6 +269,7 @@ export function createMembershipIntentStore(
         }
         const targetAccountId = String(targets[0].account_id);
 
+        let grantCapability: string | null = null;
         if (operation === "add") {
           if (grantId === null) {
             return Object.freeze({
@@ -220,6 +297,7 @@ export function createMembershipIntentStore(
               reasonCode: "grant-invalid" as const,
             });
           }
+          grantCapability = String(grants[0].capability);
         } else {
           const memberships = await tx`
             SELECT 1 FROM memberships
@@ -292,10 +370,27 @@ export function createMembershipIntentStore(
             credentialId: String(row.credential_id),
             credentialFingerprint: fromPgBase64(row.fingerprint),
           }));
+        let targetCredentialId: string | null = null;
         if (operation === "add") {
           // The roster projects the target's conversation role credential -
           // the same identity the Commit's membership row binds - so the
-          // proposed hash computed here is provable at Commit time.
+          // proposed hash computed here is provable at Commit time. A target
+          // without one is issued its conversation-scoped credential here,
+          // under the role the admitting grant's capability maps to; a
+          // cancelled or expired intent leaves it in place - it is inert
+          // without a membership and a send grant, and a later add reuses
+          // the deterministic id.
+          const issued = await issueTargetRoleCredential(tx, {
+            conversationId,
+            purpose,
+            projectRefId: String(conversation.project_ref_id),
+            targetInstallationId,
+            targetAccountId,
+            targetFingerprint: targets[0].fingerprint,
+            grantCapability: grantCapability!,
+            now,
+          });
+          if (issued.status !== "ok") return issued.refusal;
           const credentials = await tx`
             SELECT credential_id,
                    encode(credential_fingerprint, 'base64') AS fingerprint
@@ -310,6 +405,7 @@ export function createMembershipIntentStore(
               reasonCode: "target-credential-missing" as const,
             });
           }
+          targetCredentialId = String(credentials[0].credential_id);
           projectedRoster.push({
             conversationId,
             conversationGeneration: String(conversation.generation),
@@ -390,6 +486,7 @@ export function createMembershipIntentStore(
             purpose,
             operation === "remove" ? targetInstallationId : null,
           ),
+          targetCredentialId,
           expiresAt,
         });
       });

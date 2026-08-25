@@ -29,7 +29,13 @@ import { createExternalProposalStore } from "../storage/externalProposalStore";
 import {
   refreshCustodySnapshotDigest,
 } from "../storage/postgresDeliveryStore";
-import { setDeliveryLabClock } from "../storage/postgresDeliveryLab.testing";
+import {
+  restoreAppendAuthorityForTesting,
+  setDeliveryLabClock,
+  snapshotAppendAuthorityForTesting,
+  type AppendAuthoritySnapshot,
+} from "../storage/postgresDeliveryLab.testing";
+import { provisionProjectMessaging } from "../storage/appendAuthority";
 import { createInProcessDpopReplayGuard } from "./dpop";
 import { createMessagingHttpHandlers } from "./messagingHttp";
 import { fictionalDeliveryLabKeyPairForTesting } from "../delivery/fictionalCryptoPorts.testing";
@@ -49,6 +55,8 @@ const NOW_MS = Date.parse(NOW);
 const BASE = "https://api.lab.test";
 const MEDIA_TYPE = "application/vnd.juicebox.messaging.v1+json";
 const POLICY_ID = "00000000-0000-4000-8000-0000000b0001";
+const PROVISIONING_SEED = Buffer.alloc(32, 0x63);
+const INTERNAL_SYNC_TOKEN = "lab-internal-sync-token";
 const P256_ORDER =
   0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551n;
 
@@ -67,6 +75,9 @@ describeStorage("messaging HTTP surface", () => {
   let committer: EnrolledDevice;
   let target: EnrolledDevice;
   let pre: Record<string, unknown>;
+  let authorityBefore: AppendAuthoritySnapshot;
+  let witnessSql3: Sql | null = null;
+  let core3: ReturnType<typeof createWitnessCore>;
   let handlers8453: ReturnType<typeof createMessagingHttpHandlers>;
   let customer: EnrolledDevice & { walletAddress: string };
   let purchaseClaimHandle: string;
@@ -268,6 +279,7 @@ describeStorage("messaging HTTP surface", () => {
   };
 
   beforeAll(async () => {
+    process.env.JBM_INTERNAL_SYNC_TOKEN = INTERNAL_SYNC_TOKEN;
     sql = postgres(DATABASE_URL!, { max: 8, onnotice: () => {} });
     await setDeliveryLabClock(sql, NOW);
     const identitySecret = Buffer.alloc(32, 0x5f);
@@ -306,7 +318,7 @@ describeStorage("messaging HTTP surface", () => {
     const [conversation] = await sql`
       SELECT project_ref_id, epoch, roster_version, roster_hash,
              recipient_set_version, recipient_set_hash,
-             confirmed_transcript_hash
+             confirmed_transcript_hash, etag
       FROM conversations WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
     pre = conversation;
     await sql`
@@ -350,6 +362,20 @@ describeStorage("messaging HTTP surface", () => {
         ${committer.accountId}, ${deviceCredentialId(0xb2)}, 'customer',
         'purchase_support', 'welcome', 1, ${NOW}::timestamptz
       )`;
+    // The Add commit re-issues the shared conversation's policy head under
+    // the project's provisioned signer; afterAll restores the fixture graph.
+    await sql.begin((tx) =>
+      provisionProjectMessaging(
+        tx,
+        PROVISIONING_SEED,
+        String(conversation.project_ref_id),
+        NOW,
+      ),
+    );
+    authorityBefore = await snapshotAppendAuthorityForTesting(
+      sql,
+      LAB_CONVERSATION_ID,
+    );
   });
 
   afterAll(async () => {
@@ -390,10 +416,13 @@ describeStorage("messaging HTTP surface", () => {
           recipient_set_hash = ${pre.recipient_set_hash as Buffer},
           confirmed_transcript_hash =
             ${pre.confirmed_transcript_hash as Buffer},
+          etag = ${String(pre.etag)},
           state = 'active'
         WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+      await restoreAppendAuthorityForTesting(tx, authorityBefore);
       await refreshCustodySnapshotDigest(tx, LAB_CONVERSATION_ID);
     });
+    await witnessSql3?.end({ timeout: 5 });
     await sql?.end({ timeout: 5 });
   });
 
@@ -495,6 +524,8 @@ describeStorage("messaging HTTP surface", () => {
     expect(intentResponse.status).toBe(201);
     const intent = (await intentResponse.json()) as Record<string, string>;
     expect(intent.takenKeyPackage).not.toBeNull();
+    // The pre-seeded role credential is reused, never re-issued.
+    expect(intent.targetCredentialId).toBe(deviceCredentialId(0xb3));
 
     // The external proposal is the server's act; recorded via the store.
     const proposals = createExternalProposalStore({
@@ -566,7 +597,7 @@ describeStorage("messaging HTTP surface", () => {
               ),
             },
           ],
-          targetCredentialId: deviceCredentialId(0xb3),
+          targetCredentialId: intent.targetCredentialId,
         },
       ),
       LAB_CONVERSATION_ID,
@@ -1104,8 +1135,8 @@ describeStorage("messaging HTTP surface", () => {
       new URL("../../../witness/migrations", import.meta.url).pathname,
       () => {},
     );
-    const witnessSql3 = postgres(witnessUrl3, { max: 2, onnotice: () => {} });
-    try {
+    witnessSql3 = postgres(witnessUrl3, { max: 2, onnotice: () => {} });
+    {
       const witnessSeed = Buffer.alloc(32, 0x71);
       const witnessKeys = createPrivateKey({
         key: Buffer.concat([
@@ -1115,7 +1146,7 @@ describeStorage("messaging HTTP surface", () => {
         format: "der",
         type: "pkcs8",
       });
-      const core3 = createWitnessCore({
+      core3 = createWitnessCore({
         sql: witnessSql3,
         signer: {
           witnessKeyId: "lab-policy-witness-1",
@@ -1293,10 +1324,333 @@ describeStorage("messaging HTTP surface", () => {
         projectOwner.installationId,
       );
       expect(crossRead.status).toBe(403);
-    } finally {
-      await witnessSql3.end({ timeout: 5 });
     }
   });
+
+  it("adds a third member who reads and appends through the real lane", async () => {
+    // A fresh device on a fresh account: no hand-seeded credential, no
+    // grant beyond the purchase-support lease the intent binds.
+    const third = await enrollOverHttp(handlers8453, "eip155:8453");
+    const published = await handlers8453.publishKeyPackages(
+      authedRequest(
+        third,
+        "POST",
+        `/v1/installations/${third.installationId}/key-packages`,
+        {
+          keyPackages: [
+            { keyPackage: randomBytes(220).toString("base64url") },
+          ],
+        },
+      ),
+      third.installationId,
+    );
+    expect(published.status).toBe(201);
+    const claimHandle = randomBytes(32).toString("base64url");
+    const grantId = "00000000-0000-4000-8000-0000000b0030";
+    await sql`
+      INSERT INTO eligibility_grants (
+        grant_id, project_ref_id, account_id, installation_id, capability,
+        policy_id, policy_revision, policy_hash, subject_hash,
+        claim_handle_hash, finality_profile_id, finality_profile_revision,
+        finality_profile_hash, finality_evidence_digest, source_chain_id,
+        source_block, source_block_hash, finality_status, state, issued_at,
+        valid_until
+      ) VALUES (
+        ${grantId}, ${String(pre.project_ref_id)}, ${third.accountId},
+        ${third.installationId}, 'purchase-support', ${POLICY_ID}, 1,
+        ${Buffer.alloc(32, 0xb1)}, ${Buffer.alloc(32, 0xc4)},
+        ${crypto.hmacEligibilityClaimHandle(claimHandle)},
+        '00000000-0000-4000-8000-0000000000f1', 1, ${Buffer.alloc(32, 0xf1)},
+        ${Buffer.alloc(32, 0xc5)}, ${FIXTURE_CHAIN_ID}, 1,
+        ${Buffer.alloc(32, 0xc6)}, 'verified-finalized', 'active',
+        ${NOW}::timestamptz, ${NOW}::timestamptz + interval '5 minutes'
+      )`;
+
+    const conversationId = activatedConversationId;
+    const [before] = await sql`
+      SELECT confirmed_transcript_hash, last_policy_head_sequence
+      FROM conversations WHERE conversation_id = ${conversationId}`;
+    const grantsBefore = await sql`
+      SELECT installation_id FROM conversation_send_grants
+      WHERE conversation_id = ${conversationId}`;
+    expect(grantsBefore.length).toBe(2);
+
+    // 1. Intent by an existing member issues the target's role credential.
+    const intentResponse = await handlers8453.createMembershipIntent(
+      authedRequest(
+        customer,
+        "POST",
+        `/v1/conversations/${conversationId}/membership-intents`,
+        {
+          operation: "add",
+          targetInstallationId: third.installationId,
+          eligibilityClaimHandle: claimHandle,
+        },
+      ),
+      conversationId,
+    );
+    if (intentResponse.status !== 201) {
+      throw new Error(`intent refused: ${await intentResponse.text()}`);
+    }
+    const intent = (await intentResponse.json()) as Record<string, string>;
+    expect(intent.targetCredentialId).toMatch(/^[0-9a-f-]{36}$/);
+    const [issuedCredential] = await sql`
+      SELECT role, state FROM role_credentials
+      WHERE credential_id = ${intent.targetCredentialId}
+        AND conversation_id = ${conversationId}
+        AND installation_id = ${third.installationId}`;
+    expect(issuedCredential).toMatchObject({ role: "customer", state: "active" });
+
+    // 2. The external proposal rides the internal service route.
+    const [provision] = await sql`
+      SELECT current_external_sender_credential_id, policy_log_checkpoint_id
+      FROM project_messaging_provisions
+      WHERE project_ref_id = ${String(pre.project_ref_id)}`;
+    const proposalBody = {
+      intentId: intent.intentId,
+      publicMessage: Buffer.from("third-add-proposal", "utf8").toString(
+        "base64url",
+      ),
+      authorizationRecordHash: Buffer.alloc(32, 0xc7).toString("base64url"),
+      signerExternalSenderCredentialId: String(
+        provision.current_external_sender_credential_id,
+      ),
+      transparencyCheckpointId: String(provision.policy_log_checkpoint_id),
+    };
+    const proposalRequest = (token: string | null) =>
+      new Request(`${BASE}/v1/internal/membership-proposals`, {
+        method: "POST",
+        headers: {
+          "Content-Type": MEDIA_TYPE,
+          ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify(proposalBody),
+      });
+    expect(
+      (await handlers8453.recordMembershipProposal(proposalRequest(null)))
+        .status,
+    ).toBe(401);
+    expect(
+      (await handlers8453.recordMembershipProposal(proposalRequest("wrong")))
+        .status,
+    ).toBe(401);
+    const proposalResponse = await handlers8453.recordMembershipProposal(
+      proposalRequest(INTERNAL_SYNC_TOKEN),
+    );
+    if (proposalResponse.status !== 201) {
+      throw new Error(`proposal refused: ${await proposalResponse.text()}`);
+    }
+    expect(
+      (
+        await handlers8453.recordMembershipProposal(
+          proposalRequest(INTERNAL_SYNC_TOKEN),
+        )
+      ).status,
+    ).toBe(403);
+
+    // 3. The customer's device commits the Add.
+    const commitBytes = Buffer.from("third-mls-commit", "utf8");
+    const commitResponse = await handlers8453.consumeCommit(
+      authedRequest(
+        customer,
+        "POST",
+        `/v1/conversations/${conversationId}/commits`,
+        {
+          intentId: intent.intentId,
+          expectedEpoch: intent.baseEpoch,
+          expectedRosterVersion: intent.baseRosterVersion,
+          proposedRosterHash: intent.proposedRosterHash,
+          mandatoryProposals: [],
+          envelopeId: randomUUID(),
+          commit: commitBytes.toString("base64url"),
+          envelopeSha256: createHash("sha256")
+            .update(commitBytes)
+            .digest("base64url"),
+          baseConfirmedTranscriptHash: (
+            before.confirmed_transcript_hash as Buffer
+          ).toString("base64url"),
+          resultingConfirmedTranscriptHash: Buffer.alloc(32, 0xc8).toString(
+            "base64url",
+          ),
+          resultingEpoch: String(BigInt(intent.baseEpoch) + 1n),
+          welcomeByInstallation: [
+            {
+              installationId: third.installationId,
+              welcome: Buffer.from("third-welcome", "utf8").toString(
+                "base64url",
+              ),
+            },
+          ],
+          targetCredentialId: intent.targetCredentialId,
+        },
+      ),
+      conversationId,
+    );
+    if (commitResponse.status !== 200) {
+      throw new Error(`commit refused: ${await commitResponse.text()}`);
+    }
+    const committed = (await commitResponse.json()) as Record<string, string>;
+
+    // The head advanced, every grant re-anchored to it, and the anchor is
+    // honestly unwitnessed: the fence closes appends for everyone.
+    const [anchor] = await sql`
+      SELECT policy_head_sequence, witness_state
+      FROM delivery_policy_head_anchors
+      WHERE conversation_id = ${conversationId}`;
+    const expectedSequence = String(
+      BigInt(String(before.last_policy_head_sequence)) + 1n,
+    );
+    expect(String(anchor.policy_head_sequence)).toBe(expectedSequence);
+    expect(String(anchor.witness_state)).toBe("missing");
+    const grants = await sql`
+      SELECT installation_id, policy_head_sequence, role
+      FROM conversation_send_grants
+      WHERE conversation_id = ${conversationId}
+      ORDER BY installation_id`;
+    expect(grants.length).toBe(3);
+    expect(
+      grants.every(
+        (grant) => String(grant.policy_head_sequence) === expectedSequence,
+      ),
+    ).toBe(true);
+    expect(
+      grants.find(
+        (grant) => String(grant.installation_id) === third.installationId,
+      ),
+    ).toMatchObject({ role: "customer" });
+    // The proof verifier refuses an unwitnessed head before admission
+    // reaches its own policy-head-not-witnessed ladder: a 503, never a 201.
+    const closed = await sendVia(customer, conversationId, "too early");
+    expect(closed.status).toBe(503);
+
+    // 4. The witness cosigns the new checkpoint; the head becomes current.
+    const report = await runPolicyWitnessSync(sql, {
+      submitChain: (submission) =>
+        core3.extendChain("policy", {
+          checkpointId: submission.checkpointId,
+          treeSize: submission.treeSize,
+          rootHash: submission.rootHash,
+          previousCheckpointId: submission.previousCheckpointId,
+          signerKeyId: submission.signerKeyId,
+        }),
+    });
+    expect(report.blocked).toBeNull();
+    expect(report.headsVerified).toBeGreaterThanOrEqual(1);
+    const [verifiedAnchor] = await sql`
+      SELECT witness_state FROM delivery_policy_head_anchors
+      WHERE conversation_id = ${conversationId}`;
+    expect(String(verifiedAnchor.witness_state)).toBe("verified");
+
+    // 5. The third member reads from its Commit and appends; the original
+    // members still append.
+    const eventsPath = `/v1/conversations/${conversationId}/events`;
+    const page = await handlers8453.readConversationEvents(
+      authedRequest(third, "GET", eventsPath),
+      conversationId,
+    );
+    expect(page.status).toBe(200);
+    const events = (await page.json()) as {
+      events: { position: string; envelopeClass: string }[];
+    };
+    expect(events.events[0]).toMatchObject({
+      position: committed.position,
+      envelopeClass: "mls_commit",
+    });
+
+    for (const [device, label] of [
+      [third, "third"],
+      [customer, "customer"],
+      [projectOwner, "owner"],
+    ] as const) {
+      const sent = await sendVia(device, conversationId, `${label} ciphertext`);
+      if (sent.status !== 201) {
+        throw new Error(
+          `${label} append refused: ${JSON.stringify(sent.body)}`,
+        );
+      }
+      expect(sent.body).toMatchObject({ status: "accepted" });
+    }
+    const fences = await sql`
+      SELECT installation_id FROM delivery_sender_fences
+      WHERE conversation_id = ${conversationId}`;
+    expect(fences.length).toBe(3);
+    const thirdPage = await handlers8453.readConversationEvents(
+      authedRequest(third, "GET", eventsPath),
+      conversationId,
+    );
+    const thirdEvents = (await thirdPage.json()) as {
+      events: { envelopeClass: string }[];
+    };
+    expect(thirdEvents.events.map((event) => event.envelopeClass)).toEqual([
+      "mls_commit",
+      "application",
+      "application",
+      "application",
+    ]);
+  });
+
+  // Appends against the CURRENT head: the detail read carries the etag and
+  // policy head the request must cite, both of which change on a re-issue.
+  async function sendVia(
+    device: EnrolledDevice,
+    conversationId: string,
+    text: string,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    const detailResponse = await handlers8453.readConversationDetail(
+      authedRequest(device, "GET", `/v1/conversations/${conversationId}`),
+      conversationId,
+    );
+    if (detailResponse.status !== 200) {
+      throw new Error(`detail refused: ${await detailResponse.text()}`);
+    }
+    const detail = (await detailResponse.json()) as {
+      etag: string;
+      epoch: string;
+      rosterVersion: string;
+      confirmedTranscriptHash: string;
+      policyHead: {
+        policyHeadId: string;
+        policyHeadSequence: string;
+        policyHeadHash: string;
+      };
+    };
+    const ciphertext = Buffer.from(text, "utf8").toString("base64url");
+    const url = `${BASE}/v1/conversations/${conversationId}/envelopes`;
+    const response = await handlers8453.appendEnvelope(
+      new Request(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": MEDIA_TYPE,
+          "If-Match": detail.etag,
+          "Idempotency-Key": randomBytes(32).toString("base64url"),
+          Authorization: `DPoP ${device.accessToken}`,
+          DPoP: dpopProof(device, "POST", url),
+        },
+        body: JSON.stringify({
+          envelopeId: randomUUID(),
+          policyHeadId: detail.policyHead.policyHeadId,
+          policyHeadSequence: detail.policyHead.policyHeadSequence,
+          policyHeadHash: detail.policyHead.policyHeadHash,
+          expectedEpoch: detail.epoch,
+          expectedRosterVersion: detail.rosterVersion,
+          expectedConfirmedTranscriptHash: detail.confirmedTranscriptHash,
+          contentType:
+            "application/vnd.juicebox.messaging.mls-private-message",
+          ciphertext,
+          envelopeSha256: createHash("sha256")
+            .update(Buffer.from(ciphertext, "base64url"))
+            .digest("base64url"),
+          attachmentIds: [],
+        }),
+      }),
+      conversationId,
+    );
+    return {
+      status: response.status,
+      body: (await response.json()) as Record<string, unknown>,
+    };
+  }
+
 });
 
 function encodePayEventData(beneficiary: string): string {

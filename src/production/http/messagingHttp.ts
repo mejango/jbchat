@@ -35,7 +35,11 @@ import {
   createMembershipIntentStore,
   type MembershipIntentStore,
 } from "../storage/membershipIntentStore";
-import type { ExternalProposalSigningPort } from "../storage/externalProposalStore";
+import {
+  createExternalProposalStore,
+  type ExternalProposalSigningPort,
+  type ExternalProposalStore,
+} from "../storage/externalProposalStore";
 import {
   createMembershipCommitStore,
   type MembershipCommitStore,
@@ -215,6 +219,8 @@ export interface MessagingHttpHandlers {
     installationId: string,
   ) => Promise<Response>;
   readonly policyWitnessSync: (request: Request) => Promise<Response>;
+  /** Internal: records the server's external-sender Add/Remove proposal. */
+  readonly recordMembershipProposal: (request: Request) => Promise<Response>;
   readonly externalSenderRotation: (request: Request) => Promise<Response>;
   readonly rpcDiagnostics: (request: Request) => Promise<Response>;
   readonly enrollmentStatus: (request: Request) => Promise<Response>;
@@ -268,8 +274,9 @@ export function createMessagingHttpHandlers(
     readonly sql: Sql;
     readonly crypto: IdentityKeyedCryptoPort;
     readonly enrollment: EnrollmentStore;
-    readonly intents: MembershipIntentStore;
+    readonly intents: MembershipIntentStore | null;
     readonly commits: MembershipCommitStore | null;
+    readonly proposals: ExternalProposalStore | null;
     readonly cursorCodec: ReturnType<
       typeof createKeyedConversationCursorCodec
     > | null;
@@ -345,9 +352,22 @@ export function createMessagingHttpHandlers(
         credentialSigner,
         allowedChainIds: config.allowedChainIds,
       }),
-      intents: createMembershipIntentStore({ sql }),
-      commits: logSigner
-        ? createMembershipCommitStore({ sql, signer: logSigner })
+      intents: config.provisioningSeed
+        ? createMembershipIntentStore({
+            sql,
+            provisioningSeed: config.provisioningSeed,
+          })
+        : null,
+      commits:
+        logSigner && config.provisioningSeed
+          ? createMembershipCommitStore({
+              sql,
+              signer: logSigner,
+              provisioningSeed: config.provisioningSeed,
+            })
+          : null,
+      proposals: logSigner
+        ? createExternalProposalStore({ sql, signer: logSigner })
         : null,
       cursorCodec: config.cursor
         ? createKeyedConversationCursorCodec({
@@ -815,6 +835,7 @@ export function createMessagingHttpHandlers(
         }
         grantId = String(grants[0].grant_id);
       }
+      if (!wired.intents) return notFound();
       const created = await wired.intents.createIntent({
         operation: record.operation,
         conversationId,
@@ -846,6 +867,7 @@ export function createMessagingHttpHandlers(
       }
       const session = await authenticate(wired, request);
       if (!session) return problem(401, "session_invalid");
+      if (!wired.intents) return notFound();
       const cancelled = await wired.intents.cancelIntent(
         intentId,
         session.installationId,
@@ -1954,6 +1976,40 @@ export function createMessagingHttpHandlers(
         wired.policyWitnessSubmit,
       );
       return jsonNoStore(200, report);
+    },
+
+    // The external proposal is the SERVICE acting as the MLS external
+    // sender (service-api.md §8.2): a member session must never supply the
+    // PublicMessage bytes the log attributes to the entitlement signer, so
+    // this rides the internal bearer scheme, not DPoP. The store still
+    // proves the intent is live, the signer credential is the project's
+    // published one, and the transparency checkpoint exists.
+    async recordMembershipProposal(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!wired.proposals || !wired.internalSyncToken) return notFound();
+      const authorization = request.headers.get("authorization");
+      if (authorization !== `Bearer ${wired.internalSyncToken}`) {
+        return problem(401, "unauthorized");
+      }
+      // A PublicMessage may be up to 256 KiB decoded; the commit ceiling
+      // covers its base64url form with room for the envelope fields.
+      const body = await readBody(request, MAX_COMMIT_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const recorded = await wired.proposals.recordProposal(body);
+      if (recorded.status === "conflict") {
+        return problem(409, recorded.reasonCode);
+      }
+      if (recorded.status === "refused") {
+        if (recorded.reasonCode === "malformed-request") {
+          return problem(400, recorded.reasonCode);
+        }
+        if (recorded.reasonCode === "log-authority-unavailable") {
+          return problem(503, recorded.reasonCode);
+        }
+        return problem(403, recorded.reasonCode);
+      }
+      return jsonNoStore(201, recorded);
     },
 
     async enrollmentStatus(request: Request): Promise<Response> {

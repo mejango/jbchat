@@ -19,6 +19,12 @@ import {
   refreshCustodySnapshotDigest,
 } from "./postgresDeliveryStore";
 import type { ExternalProposalSigningPort } from "./externalProposalStore";
+import {
+  ensureMemberQuotaBindings,
+  issueConversationPolicyHead,
+  readProjectProvision,
+  type GrantMaterial,
+} from "./appendAuthority";
 
 const ENVELOPE_RETENTION_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
 const COMMIT_CONTENT_TYPE =
@@ -45,6 +51,8 @@ class CommitCasError extends Error {
 export interface MembershipCommitStoreContext {
   readonly sql: Sql;
   readonly signer: ExternalProposalSigningPort;
+  /** Derives the policy-head signer and grant evidence ids (appendAuthority). */
+  readonly provisioningSeed: Buffer;
 }
 
 export type MembershipCommitResult =
@@ -90,7 +98,7 @@ export interface MembershipCommitStore {
 export function createMembershipCommitStore(
   context: MembershipCommitStoreContext,
 ): MembershipCommitStore {
-  const { sql, signer } = context;
+  const { sql, signer, provisioningSeed } = context;
 
   const dbNow = async (tx: TransactionSql): Promise<string> => {
     const rows = await tx`SELECT delivery_db_now() AS db_now`;
@@ -662,6 +670,7 @@ export function createMembershipCommitStore(
               state = 'active',
               epoch = ${input.resultingEpoch},
               roster_version = ${resultingRosterVersion},
+              etag = ${`"e${input.resultingEpoch}-r${resultingRosterVersion}"`},
               roster_hash = ${Buffer.from(
                 input.proposedRosterHash,
                 "base64url",
@@ -685,6 +694,104 @@ export function createMembershipCommitStore(
               envelope_bytes = envelope_bytes + ${input.commit.length},
               updated_at = ${now}::timestamptz
             WHERE conversation_id = ${conversationId}`;
+
+          // 4b. Append authority for the added member: its own quota
+          // bindings, then a re-issued policy head whose send-grant set
+          // includes the target - every existing grant is re-anchored at the
+          // new head, the anchor drops back to witness_state='missing', and
+          // appends stay closed for everyone until the witness cosigns the
+          // new checkpoint. Issued AFTER the conversation row advanced so
+          // the head carries the post-Commit epoch/roster/transcript.
+          if (operation === "add") {
+            const projectRefId = String(conversation.project_ref_id);
+            const provision = await readProjectProvision(tx, projectRefId);
+            if (!provision) {
+              throw new CommitCasError("authority-provision-missing");
+            }
+            const quotaPolicyDigest = Buffer.from(
+              conversation.quota_policy_digest as Uint8Array,
+            );
+            await ensureMemberQuotaBindings(tx, {
+              conversationId,
+              accountId: targetAccountId!,
+              installationId: targetInstallationId,
+              projectRefId,
+              realmId: String(conversation.realm_id),
+              quotaPolicyDigest,
+              windowStartedAt: now,
+              now,
+            });
+            const existingGrants = await tx`
+              SELECT installation_id, credential_id, role,
+                     role_credential_fingerprint,
+                     role_credential_subject_account_id,
+                     role_credential_valid_from, role_credential_valid_until,
+                     expires_at
+              FROM conversation_send_grants
+              WHERE conversation_id = ${conversationId}
+                AND installation_id <> ${targetInstallationId}
+              ORDER BY installation_id`;
+            const targetCredentialExpiry = new Date(
+              targetCredentialExpiresAt!,
+            ).toISOString();
+            const grants: GrantMaterial[] = [
+              ...existingGrants.map((row) => ({
+                installationId: String(row.installation_id),
+                accountId: String(row.role_credential_subject_account_id),
+                credentialId: String(row.credential_id),
+                role: String(row.role),
+                credentialFingerprint: b64(
+                  row.role_credential_fingerprint as Uint8Array,
+                ),
+                validFrom: new Date(
+                  row.role_credential_valid_from as Date,
+                ).toISOString(),
+                validUntil: new Date(
+                  row.role_credential_valid_until as Date,
+                ).toISOString(),
+                expiresAt: new Date(row.expires_at as Date).toISOString(),
+              })),
+              {
+                installationId: targetInstallationId,
+                accountId: targetAccountId!,
+                credentialId: input.targetCredentialId!,
+                role: targetRole!,
+                credentialFingerprint: b64(targetFingerprint!),
+                validFrom: now,
+                validUntil: targetCredentialExpiry,
+                expiresAt: targetCredentialExpiry,
+              },
+            ];
+            const issued = await issueConversationPolicyHead(tx, {
+              provisioningSeed,
+              conversationId,
+              projectRefId,
+              provision,
+              conversationKind: purpose,
+              conversationGeneration: String(conversation.generation),
+              quotaPolicyDigest,
+              grants,
+              // The anchor's selected pair is a projection default the
+              // reconstruction replaces per sender; the target is the one
+              // member guaranteed to be in the issued set.
+              selectedInstallationId: targetInstallationId,
+              anchor: { mode: "update" },
+              now,
+            });
+            if (issued.status !== "issued") {
+              throw new CommitCasError("policy-head-unavailable");
+            }
+            await tx`
+              INSERT INTO conversation_policy_transitions (
+                conversation_id, policy_head_sequence, policy_head_id,
+                policy_head_hash, effective_from_position, created_at
+              ) VALUES (
+                ${conversationId}, ${issued.policyHeadSequence},
+                ${issued.policyHeadId},
+                ${Buffer.from(issued.policyHeadHash, "base64url")},
+                ${position}, ${now}::timestamptz
+              ) ON CONFLICT DO NOTHING`;
+          }
 
           // 5. Mailbox fan-out: one item per live member; the added target's
           // Welcome augments its own item and never creates a second one.

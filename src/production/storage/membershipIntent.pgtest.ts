@@ -26,7 +26,13 @@ import {
   type MembershipIntentStore,
 } from "./membershipIntentStore";
 import { refreshCustodySnapshotDigest } from "./postgresDeliveryStore";
-import { setDeliveryLabClock } from "./postgresDeliveryLab.testing";
+import { provisionProjectMessaging } from "./appendAuthority";
+import {
+  restoreAppendAuthorityForTesting,
+  setDeliveryLabClock,
+  snapshotAppendAuthorityForTesting,
+  type AppendAuthoritySnapshot,
+} from "./postgresDeliveryLab.testing";
 import { createExternalProposalStore } from "./externalProposalStore";
 import { createMembershipCommitStore } from "./membershipCommitStore";
 import { signFictionalDeliveryCheckpointDigestForTesting } from "../delivery/fictionalCryptoPorts.testing";
@@ -39,6 +45,9 @@ import type { Hash32 } from "../delivery/valueObjects";
 const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
 const describeStorage = DATABASE_URL ? describe : describe.skip;
 const NOW = "2026-08-14T16:21:30.000Z";
+// Shared with messagingHttp.pgtest: both suites provision the lab project
+// and the policy-head signer is derived from this seed.
+const PROVISIONING_SEED = Buffer.alloc(32, 0x63);
 const POLICY_ID = "00000000-0000-4000-8000-0000000a0001";
 const CHECKPOINT_ID = "00000000-0000-4000-8000-0000000a0003";
 const EXTERNAL_SENDER_ID = "00000000-0000-4000-8000-0000000a0004";
@@ -52,6 +61,7 @@ describeStorage("membership intents", () => {
   let targetAccountId: string;
   let grantId: string;
   let projectRefId: string;
+  let authorityBefore: AppendAuthoritySnapshot;
 
   const enrollDevice = async (): Promise<{
     installationId: string;
@@ -211,7 +221,10 @@ describeStorage("membership intents", () => {
   beforeAll(async () => {
     sql = postgres(DATABASE_URL!, { max: 6, onnotice: () => {} });
     await setDeliveryLabClock(sql, NOW);
-    store = createMembershipIntentStore({ sql });
+    store = createMembershipIntentStore({
+      sql,
+      provisioningSeed: PROVISIONING_SEED,
+    });
     const target = await enrollDevice();
     targetInstallationId = target.installationId;
     targetAccountId = target.accountId;
@@ -256,6 +269,15 @@ describeStorage("membership intents", () => {
         ${NOW}::timestamptz + interval '30 days', ${CHECKPOINT_ID},
         ${NOW}::timestamptz, 'published'
       )`;
+    // The Add commit re-issues the conversation's policy head under the
+    // project's provisioned signer; the drills need the fixture graph back.
+    await sql.begin((tx) =>
+      provisionProjectMessaging(tx, PROVISIONING_SEED, projectRefId, NOW),
+    );
+    authorityBefore = await snapshotAppendAuthorityForTesting(
+      sql,
+      LAB_CONVERSATION_ID,
+    );
   });
 
   afterAll(async () => {
@@ -548,14 +570,8 @@ describeStorage("membership intents", () => {
       third.installationId,
       projectRefId,
     );
-    const targetCredentialId = "00000000-0000-4000-8000-0000000a0008";
-    await seedRoleCredential(
-      targetCredentialId,
-      third.installationId,
-      third.accountId,
-      0xaa,
-    );
-
+    // No hand-seeded role credential: intent creation issues the target's
+    // conversation credential under the grant's admitted role.
     const created = await store.createIntent(
       addInput({
         targetInstallationId: third.installationId,
@@ -564,6 +580,14 @@ describeStorage("membership intents", () => {
     );
     expect(created.status).toBe("created");
     if (created.status !== "created") throw new Error("intent refused");
+    const targetCredentialId = created.targetCredentialId;
+    expect(targetCredentialId).not.toBeNull();
+    const [issuedCredential] = await sql`
+      SELECT role, state FROM role_credentials
+      WHERE credential_id = ${targetCredentialId!}
+        AND conversation_id = ${LAB_CONVERSATION_ID}
+        AND installation_id = ${third.installationId}`;
+    expect(issuedCredential).toMatchObject({ role: "customer", state: "active" });
 
     const signer = {
       signCheckpointDigest: async (_keyId: string, digest: string) =>
@@ -584,12 +608,16 @@ describeStorage("membership intents", () => {
 
     const [pre] = await sql`
       SELECT epoch, roster_version, roster_hash, recipient_set_version,
-             recipient_set_hash, confirmed_transcript_hash
+             recipient_set_hash, confirmed_transcript_hash, etag
       FROM conversations WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
     const base = {
       transcript: (pre.confirmed_transcript_hash as Buffer).toString("base64"),
     };
-    const commits = createMembershipCommitStore({ sql, signer });
+    const commits = createMembershipCommitStore({
+      sql,
+      signer,
+      provisioningSeed: PROVISIONING_SEED,
+    });
     const commitBytes = Buffer.from("fictional-mls-commit", "utf8");
     const welcomeBytes = Buffer.from("fictional-mls-welcome", "utf8");
     const envelopeId = randomUUID();
@@ -693,6 +721,39 @@ describeStorage("membership intents", () => {
       WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
     expect(rosterCount[0].total).toBe(3);
 
+    // The added member now holds a send grant under a re-issued head that
+    // every existing grant re-anchored to; the anchor awaits its witness.
+    const [anchor] = await sql`
+      SELECT policy_head_sequence, witness_state
+      FROM delivery_policy_head_anchors
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(String(anchor.policy_head_sequence)).toBe(
+      String(BigInt(authorityBefore.headSequence) + 1n),
+    );
+    expect(String(anchor.witness_state)).toBe("missing");
+    const grants = await sql`
+      SELECT installation_id, policy_head_sequence
+      FROM conversation_send_grants
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+    expect(grants.length).toBe(authorityBefore.grants.length + 1);
+    expect(
+      grants.every(
+        (grant) =>
+          String(grant.policy_head_sequence) ===
+          String(anchor.policy_head_sequence),
+      ),
+    ).toBe(true);
+    expect(
+      grants.some(
+        (grant) => String(grant.installation_id) === third.installationId,
+      ),
+    ).toBe(true);
+    const fences = await sql`
+      SELECT 1 FROM delivery_sender_fences
+      WHERE conversation_id = ${LAB_CONVERSATION_ID}
+        AND installation_id = ${third.installationId}`;
+    expect(fences.length).toBe(1);
+
     // A replay of the same Commit fails CAS without a write.
     await expect(commits.consumeCommit(commitInput)).resolves.toEqual({
       status: "cas-failed",
@@ -733,8 +794,10 @@ describeStorage("membership intents", () => {
           roster_hash = ${pre.roster_hash as Buffer},
           recipient_set_version = ${String(pre.recipient_set_version)},
           recipient_set_hash = ${pre.recipient_set_hash as Buffer},
-          confirmed_transcript_hash = ${pre.confirmed_transcript_hash as Buffer}
+          confirmed_transcript_hash = ${pre.confirmed_transcript_hash as Buffer},
+          etag = ${String(pre.etag)}
         WHERE conversation_id = ${LAB_CONVERSATION_ID}`;
+      await restoreAppendAuthorityForTesting(tx, authorityBefore);
       await refreshCustodySnapshotDigest(tx, LAB_CONVERSATION_ID);
     });
   });

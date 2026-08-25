@@ -95,14 +95,29 @@ is never added by default.
    to Railway today (nixpacks is npm-only) — production needs either a
    nixpacks Rust phase or a release-pinned vendored linux binary whose
    hash enters the trust manifest (ADR 0004's stated intent).
-1. **Complete the added-member authority path.** The audit found the
-   membership-Add lane creates memberships/welcomes/projections for an
-   added member but NO role_credentials issuer, NO
+1. **Complete the added-member authority path - SHIPPED.** The audit
+   found the membership-Add lane created memberships/welcomes/projections
+   for an added member but NO role_credentials issuer, NO
    conversation_send_grants row, NO per-member quota bindings, and no
-   HTTP surface for the external-proposal step — so no added member
-   (relay or human) can currently append. Completing this (including
-   policy-head re-issuance selecting the new grant) benefits every Add,
-   not just the relay, and must land with its own storage-lab proofs.
+   HTTP surface for the external-proposal step - so no added member
+   (relay or human) could append. Now: intent creation issues the
+   target's conversation role credential under the role its grant
+   capability admits (`purchase-support` -> customer, `project-staff` ->
+   project-staff; other purposes refuse) and returns
+   `targetCredentialId`; the Commit transaction appends the target's
+   installation/account quota bindings, re-issues the policy head
+   (sequence N+1) over the full send-grant set through the same
+   zero-anchor-then-re-anchor order as genesis (`appendAuthority.ts`,
+   shared with activation), rewrites every grant at the new head, drops
+   the anchor to `witness_state='missing'` (appends close for everyone
+   until the keeper's policy-witness sync cosigns the new checkpoint),
+   and rewrites the etag and custody fences. The external proposal is
+   the service acting as MLS external sender, so it rides an internal
+   route - `POST /v1/internal/membership-proposals`, bearer
+   `JBM_INTERNAL_SYNC_TOKEN` - never a member session. Proven by the
+   storage-lab suites (intent lifecycle, HTTP add lifecycle, and a third
+   member added to an activated conversation who reads and appends while
+   the original members keep appending).
 2. **Relay provisioning + consent lane.** A service provisioner mints
    the relay installation (installations + device_credentials +
    KeyPackages need a dedicated service path — enrollment's wallet-proof

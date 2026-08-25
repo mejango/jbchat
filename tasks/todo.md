@@ -348,3 +348,19 @@ human sign-off gate.
 
 ## Review notes
 (append as phases complete)
+
+## Relay phase 1 — added-member authority path (2026-08-25)
+
+- [x] Extract appendAuthority.ts (issueConversationPolicyHead, ensureMemberQuotaBindings, provisionProjectMessaging); activate() uses it
+- [x] Role-credential issuer in membershipIntentStore.createIntent (+ targetCredentialId in result)
+- [x] membershipCommitStore: quota bindings + head re-issue + grants + etag for add
+- [x] Internal HTTP route POST /v1/internal/membership-proposals (bearer JBM_INTERNAL_SYNC_TOKEN)
+- [x] Wire provisioningSeed/proposals in messagingHttp.ts
+- [x] Tests: LAB restore helper, existing add-lifecycle suites, third-member acceptance suite
+- [x] npm run check; storage lab green (run 6, 7)
+- [ ] railway up; memory update
+
+### Review
+- consumeCommit never rewrote conversations.etag (latent: any append after a membership Commit failed conversation-state-invalid) — fixed.
+- Unwitnessed head → the proof verifier returns 503, not the 422 policy-head-not-witnessed ladder (pre-existing).
+- Policy heads carry a 5-minute expires_at and nothing refreshes the anchor; lab clocks are frozen so tests never see it. Reported, not fixed.

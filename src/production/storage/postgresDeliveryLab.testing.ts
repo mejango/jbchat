@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import type { Sql } from "postgres";
+import type { Sql, TransactionSql } from "postgres";
 import { sha256Bytes } from "../delivery/hashes";
 import {
   FICTIONAL_DELIVERY_LAB_ED25519_PUBLIC_KEY_RAW,
@@ -544,4 +544,121 @@ export async function seedPostgresDeliveryLab(
         ${signingKeyId}, ${now}::timestamptz
       )`;
   });
+}
+
+/**
+ * Suites that run a membership-Add commit against the SHARED lab
+ * conversation snapshot its append authority first: the commit re-issues
+ * the policy head, rewrites every send grant and appends the target's
+ * quota bindings, and the drills that follow expect the fixture graph
+ * back exactly. Restore deletes the re-issued head rows (no historical
+ * table references them; the immutable policy-transition row may stay -
+ * a later re-issue at the same sequence inserts ON CONFLICT DO NOTHING)
+ * and puts the anchor, grants and head pointer back.
+ */
+export interface AppendAuthoritySnapshot {
+  readonly conversationId: string;
+  readonly anchor: Record<string, unknown>;
+  readonly grants: readonly Record<string, unknown>[];
+  readonly headSequence: string;
+  readonly headHash: Uint8Array;
+  readonly maxBindingOrdinal: number;
+}
+
+export async function snapshotAppendAuthorityForTesting(
+  sql: Sql,
+  conversationId: string,
+): Promise<AppendAuthoritySnapshot> {
+  const [anchor] = await sql`
+    SELECT * FROM delivery_policy_head_anchors
+    WHERE conversation_id = ${conversationId}`;
+  const grants = await sql`
+    SELECT * FROM conversation_send_grants
+    WHERE conversation_id = ${conversationId}`;
+  const [conversation] = await sql`
+    SELECT last_policy_head_sequence, current_policy_head_hash
+    FROM conversations WHERE conversation_id = ${conversationId}`;
+  const [ordinal] = await sql`
+    SELECT COALESCE(MAX(ordinal), -1)::int AS max_ordinal
+    FROM conversation_quota_bindings WHERE conversation_id = ${conversationId}`;
+  return Object.freeze({
+    conversationId,
+    anchor,
+    grants: [...grants],
+    headSequence: String(conversation.last_policy_head_sequence),
+    headHash: conversation.current_policy_head_hash as Uint8Array,
+    maxBindingOrdinal: Number(ordinal.max_ordinal),
+  });
+}
+
+export async function restoreAppendAuthorityForTesting(
+  tx: TransactionSql,
+  snapshot: AppendAuthoritySnapshot,
+): Promise<void> {
+  const { conversationId } = snapshot;
+  const heads = await tx`
+    SELECT policy_head_id FROM policy_heads
+    WHERE conversation_id = ${conversationId}
+      AND policy_head_sequence > ${snapshot.headSequence}`;
+  for (const head of heads) {
+    const headId = String(head.policy_head_id);
+    const leaves = await tx`
+      SELECT leaf_index FROM policy_log_leaves WHERE policy_head_id = ${headId}`;
+    for (const leaf of leaves) {
+      await tx`
+        DELETE FROM policy_log_checkpoints
+        WHERE tree_size = ${Number(leaf.leaf_index) + 1}
+          AND signer_key_id = 'jbm-policy-log-2026q3'
+          AND witness_key_id = 'jbm-witness-pending'`;
+    }
+    await tx`DELETE FROM policy_log_leaves WHERE policy_head_id = ${headId}`;
+    await tx`
+      DELETE FROM policy_head_send_grant_set_members
+      WHERE policy_head_id = ${headId}`;
+    await tx`
+      DELETE FROM policy_head_mandatory_proposals
+      WHERE policy_head_id = ${headId}`;
+    await tx`DELETE FROM policy_heads WHERE policy_head_id = ${headId}`;
+  }
+  const keptInstallations = snapshot.grants.map((grant) =>
+    String(grant.installation_id),
+  );
+  await tx`
+    DELETE FROM conversation_send_grants
+    WHERE conversation_id = ${conversationId}
+      AND installation_id <> ALL(${keptInstallations}::uuid[])`;
+  await tx`
+    DELETE FROM delivery_sender_fences
+    WHERE conversation_id = ${conversationId}
+      AND installation_id <> ALL(${keptInstallations}::uuid[])`;
+  await tx`
+    DELETE FROM conversation_quota_bindings
+    WHERE conversation_id = ${conversationId}
+      AND ordinal > ${snapshot.maxBindingOrdinal}`;
+  for (const grant of snapshot.grants) {
+    // A re-issue rewrites every digest-covered column, so restore them all.
+    const {
+      conversation_id: _grantConversationId,
+      installation_id: installationId,
+      credential_id: credentialId,
+      ...grantColumns
+    } = grant;
+    void _grantConversationId;
+    await tx`
+      UPDATE conversation_send_grants SET ${tx(grantColumns)}
+      WHERE conversation_id = ${conversationId}
+        AND installation_id = ${String(installationId)}
+        AND credential_id = ${String(credentialId)}`;
+  }
+  const { conversation_id: _anchorConversationId, ...anchorColumns } =
+    snapshot.anchor;
+  void _anchorConversationId;
+  await tx`
+    UPDATE delivery_policy_head_anchors SET ${tx(anchorColumns)}
+    WHERE conversation_id = ${conversationId}`;
+  await tx`
+    UPDATE conversations SET
+      last_policy_head_sequence = ${snapshot.headSequence},
+      current_policy_head_hash = ${Buffer.from(snapshot.headHash)}
+    WHERE conversation_id = ${conversationId}`;
 }
