@@ -820,6 +820,7 @@ name = "juicebox-messaging-mls-service-bridge"
 version = "0.1.0"
 dependencies = [
  "juicebox-messaging-client-core",
+ "openmls",
  "openmls_memory_storage",
  "serde_json",
 ]

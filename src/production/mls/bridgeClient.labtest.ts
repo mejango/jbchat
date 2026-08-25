@@ -52,4 +52,32 @@ describeBridge("mls bridge", () => {
     expect((results[0] as { profile: string }).profile).toBe("jb-msg-mls-v1");
     expect(results[1]).not.toBe(results[3]);
   });
+
+  it("threads client state through identity + key package + fail-closed joins", async () => {
+    // The full welcome/seal/open round trip is proven at the Rust layer
+    // (the bridge crate's relay_state_threading test); this exercises the
+    // TS translation over the real subprocess.
+    const created = await client.createIdentity("relay-lab-000001");
+    expect(Buffer.from(created.signaturePublicKey, "base64url").length).toBe(
+      32,
+    );
+    const generated = await client.generateKeyPackage(created.state);
+    // Generating a KeyPackage stores private material: state mutates.
+    expect(generated.state).not.toBe(created.state);
+    const validation = await client.validateKeyPackage(generated.keyPackage);
+    expect(validation.valid).toBe(true);
+
+    // A garbage welcome fails closed with a stable code, never a crash.
+    await expect(
+      client.joinWelcome(
+        generated.state,
+        Buffer.from("not a welcome").toString("base64url"),
+      ),
+    ).rejects.toThrow(/bridge refused|mls\./);
+
+    // Stale/corrupt state fails closed too.
+    await expect(client.generateKeyPackage("{}")).rejects.toThrow(
+      /bridge refused/,
+    );
+  });
 });

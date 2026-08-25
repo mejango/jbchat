@@ -11,8 +11,14 @@ use juicebox_messaging_client_core as core_mls;
 use openmls_memory_storage::MemoryStorage;
 use serde_json::{json, Map, Value};
 
+mod native_client;
+use native_client::NativeMlsClient;
+
 const BRIDGE_PROTOCOL: u64 = 1;
-const MAX_REQUEST_LINE_BYTES: usize = 2 * 1024 * 1024;
+// State-threading client verbs carry a full client snapshot per request;
+// a relay serving a handful of conversations stays well under this. The
+// ceiling exists to bound memory, not to size-fit the snapshot.
+const MAX_REQUEST_LINE_BYTES: usize = 8 * 1024 * 1024;
 
 fn main() {
     let stdin = std::io::stdin();
@@ -70,7 +76,89 @@ fn dispatch(verb: &str, request: &Map<String, Value>) -> Result<Value, &'static 
             "maxWelcomeWireBytes": core_mls::MAX_WELCOME_WIRE_BYTES,
             "maxApplicationWireBytes": core_mls::MAX_APPLICATION_WIRE_BYTES,
             "keyPackageLifetimeSeconds": core_mls::KEY_PACKAGE_LIFETIME_SECONDS,
+            // The relay is always the WELCOMED side; group creation and
+            // Adds stay on member devices, so those verbs do not exist.
+            "clientVerbs": [
+                "client/create-identity",
+                "client/generate-key-package",
+                "client/join-welcome",
+                "client/seal-application",
+                "client/open-application",
+                "client/process-commit",
+            ],
         })),
+        // State-threading client verbs (ADR 0006 phase 0). The caller
+        // holds custody: a snapshot rides in, the op runs over the frozen
+        // profile, and the MUTATED snapshot rides back out — MLS ratchets
+        // advance on open/seal, so the returned state must always replace
+        // the stored one atomically.
+        "client/create-identity" => {
+            let label = request
+                .get("label")
+                .and_then(Value::as_str)
+                .ok_or("bridge.malformed_request")?;
+            let client = NativeMlsClient::create(label).map_err(|error| error.code())?;
+            Ok(json!({
+                "state": client.export_state().map_err(|error| error.code())?,
+                "signaturePublicKey": hex_encode(&client.signature_public_key()),
+            }))
+        }
+        "client/generate-key-package" => {
+            let client = client_from(request)?;
+            let bytes = client
+                .generate_key_package()
+                .map_err(|error| error.code())?;
+            Ok(json!({
+                "state": client.export_state().map_err(|error| error.code())?,
+                "keyPackage": hex_encode(&bytes),
+            }))
+        }
+        "client/join-welcome" => {
+            let client = client_from(request)?;
+            let welcome = require_hex_field(request, "welcome")?;
+            let group_id = client
+                .join_from_welcome(&welcome)
+                .map_err(|error| error.code())?;
+            Ok(json!({
+                "state": client.export_state().map_err(|error| error.code())?,
+                "groupId": hex_encode(&group_id),
+            }))
+        }
+        "client/seal-application" => {
+            let client = client_from(request)?;
+            let group_id = require_hex_field(request, "groupId")?;
+            let plaintext = require_hex_field(request, "plaintext")?;
+            let message = client
+                .seal_application(&group_id, &plaintext)
+                .map_err(|error| error.code())?;
+            Ok(json!({
+                "state": client.export_state().map_err(|error| error.code())?,
+                "message": hex_encode(&message),
+            }))
+        }
+        "client/open-application" => {
+            let client = client_from(request)?;
+            let group_id = require_hex_field(request, "groupId")?;
+            let message = require_hex_field(request, "message")?;
+            let plaintext = client
+                .open_application(&group_id, &message)
+                .map_err(|error| error.code())?;
+            Ok(json!({
+                "state": client.export_state().map_err(|error| error.code())?,
+                "plaintext": hex_encode(&plaintext),
+            }))
+        }
+        "client/process-commit" => {
+            let client = client_from(request)?;
+            let group_id = require_hex_field(request, "groupId")?;
+            let commit = require_hex_field(request, "commit")?;
+            client
+                .process_commit(&group_id, &commit)
+                .map_err(|error| error.code())?;
+            Ok(json!({
+                "state": client.export_state().map_err(|error| error.code())?,
+            }))
+        }
         "key-package/validate" => {
             let bytes = require_hex_field(request, "keyPackage")?;
             let provider = core_mls::ProfileProvider::new(MemoryStorage::default());
@@ -105,6 +193,14 @@ fn dispatch(verb: &str, request: &Map<String, Value>) -> Result<Value, &'static 
         }
         _ => Err("bridge.unknown_verb"),
     }
+}
+
+fn client_from(request: &Map<String, Value>) -> Result<NativeMlsClient, &'static str> {
+    let state = request
+        .get("state")
+        .and_then(Value::as_str)
+        .ok_or("bridge.malformed_request")?;
+    NativeMlsClient::import_state(state).map_err(|error| error.code())
 }
 
 fn require_hex_field(request: &Map<String, Value>, field: &str) -> Result<Vec<u8>, &'static str> {
@@ -201,6 +297,128 @@ mod tests {
         let response = handle_line(&request);
         assert_eq!(response["ok"], Value::Bool(true));
         assert_eq!(response["result"]["valid"], Value::Bool(false));
+    }
+
+    #[test]
+    fn relay_state_threading_round_trip_over_the_verbs() {
+        // The "member device" side runs the core directly (as a browser
+        // would); the relay side is driven ONLY through the client/*
+        // verbs, re-importing the returned snapshot at every step — which
+        // is exactly the DB-custody model the service uses.
+        let member = core_mls::ProfileProvider::new(MemoryStorage::default());
+        let member_id =
+            core_mls::create_synthetic_identity(&member, "member-device-1").expect("member");
+
+        let created = handle_line(
+            &serde_json::to_string(&json!({
+                "id": "1", "verb": "client/create-identity", "label": "relay-tg-000001",
+            }))
+            .expect("request"),
+        );
+        assert_eq!(created["ok"], Value::Bool(true));
+        let state_one = created["result"]["state"]
+            .as_str()
+            .expect("state")
+            .to_owned();
+
+        let generated = handle_line(
+            &serde_json::to_string(&json!({
+                "id": "2", "verb": "client/generate-key-package", "state": state_one,
+            }))
+            .expect("request"),
+        );
+        assert_eq!(generated["ok"], Value::Bool(true));
+        let state_two = generated["result"]["state"]
+            .as_str()
+            .expect("state")
+            .to_owned();
+        let relay_key_package =
+            hex_decode(generated["result"]["keyPackage"].as_str().expect("kp")).expect("kp hex");
+
+        // Member creates the group and Adds the relay.
+        let group_id = [0x77u8; 32];
+        let mut group = core_mls::create_group(
+            &member,
+            &member_id,
+            openmls::prelude::GroupId::from_slice(&group_id),
+        )
+        .expect("group");
+        let decoded = core_mls::decode_key_package(&member, &relay_key_package).expect("decode");
+        let (_commit, welcome) =
+            core_mls::add_member(&mut group, &member, &member_id, &decoded).expect("add");
+
+        let joined = handle_line(
+            &serde_json::to_string(&json!({
+                "id": "3", "verb": "client/join-welcome",
+                "state": state_two, "welcome": hex_encode(&welcome),
+            }))
+            .expect("request"),
+        );
+        assert_eq!(joined["ok"], Value::Bool(true));
+        assert_eq!(
+            joined["result"]["groupId"].as_str().expect("group id"),
+            hex_encode(&group_id),
+        );
+        let state_three = joined["result"]["state"]
+            .as_str()
+            .expect("state")
+            .to_owned();
+
+        // Member -> relay: the relay opens through the verbs.
+        let sealed =
+            core_mls::seal_application(&mut group, &member, &member_id, b"order #4 shipped")
+                .expect("seal");
+        let opened = handle_line(
+            &serde_json::to_string(&json!({
+                "id": "4", "verb": "client/open-application",
+                "state": state_three, "groupId": hex_encode(&group_id),
+                "message": hex_encode(&sealed),
+            }))
+            .expect("request"),
+        );
+        assert_eq!(opened["ok"], Value::Bool(true));
+        assert_eq!(
+            hex_decode(opened["result"]["plaintext"].as_str().expect("plaintext")).expect("hex"),
+            b"order #4 shipped".to_vec(),
+        );
+        let state_four = opened["result"]["state"]
+            .as_str()
+            .expect("state")
+            .to_owned();
+
+        // Relay -> member: sealed through the verbs, opened by the member.
+        let replied = handle_line(
+            &serde_json::to_string(&json!({
+                "id": "5", "verb": "client/seal-application",
+                "state": state_four, "groupId": hex_encode(&group_id),
+                "plaintext": hex_encode(b"thanks, got it"),
+            }))
+            .expect("request"),
+        );
+        assert_eq!(replied["ok"], Value::Bool(true));
+        let reply_bytes =
+            hex_decode(replied["result"]["message"].as_str().expect("message")).expect("hex");
+        assert_eq!(
+            core_mls::open_application(&mut group, &member, &reply_bytes).expect("open"),
+            b"thanks, got it".to_vec(),
+        );
+
+        // A STALE snapshot must fail closed, not silently double-decrypt:
+        // reusing state_three (pre-open) to open the same message again is
+        // an MLS replay and the core refuses it... but a FRESH message
+        // still opens with the LATEST snapshot.
+        let sealed_two =
+            core_mls::seal_application(&mut group, &member, &member_id, b"second").expect("seal");
+        let latest_state = replied["result"]["state"].as_str().expect("state");
+        let opened_two = handle_line(
+            &serde_json::to_string(&json!({
+                "id": "6", "verb": "client/open-application",
+                "state": latest_state, "groupId": hex_encode(&group_id),
+                "message": hex_encode(&sealed_two),
+            }))
+            .expect("request"),
+        );
+        assert_eq!(opened_two["ok"], Value::Bool(true));
     }
 
     #[test]

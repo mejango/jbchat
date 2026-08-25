@@ -31,6 +31,37 @@ export interface MlsBridgeClient {
     keyPackageBase64Url: string,
   ) => Promise<MlsKeyPackageValidation>;
   readonly generateSyntheticKeyPackage: (label: string) => Promise<string>;
+  /**
+   * State-threading client verbs (ADR 0006 phase 0). Every call takes the
+   * caller's snapshot and returns the MUTATED snapshot — MLS ratchets
+   * advance on open/seal, so the caller must atomically replace its stored
+   * state with the returned one, under whatever lock guards that row.
+   */
+  readonly createIdentity: (
+    label: string,
+  ) => Promise<{ state: string; signaturePublicKey: string }>;
+  readonly generateKeyPackage: (
+    state: string,
+  ) => Promise<{ state: string; keyPackage: string }>;
+  readonly joinWelcome: (
+    state: string,
+    welcomeBase64Url: string,
+  ) => Promise<{ state: string; groupId: string }>;
+  readonly sealApplication: (
+    state: string,
+    groupIdBase64Url: string,
+    plaintext: Uint8Array,
+  ) => Promise<{ state: string; message: string }>;
+  readonly openApplication: (
+    state: string,
+    groupIdBase64Url: string,
+    messageBase64Url: string,
+  ) => Promise<{ state: string; plaintext: Uint8Array }>;
+  readonly processCommit: (
+    state: string,
+    groupIdBase64Url: string,
+    commitBase64Url: string,
+  ) => Promise<{ state: string }>;
   readonly close: () => void;
 }
 
@@ -163,6 +194,83 @@ export function createMlsBridgeClient(binaryPath: string): MlsBridgeClient {
       return Buffer.from(String(result.keyPackage), "hex").toString(
         "base64url",
       );
+    },
+    async createIdentity(label: string) {
+      const result = await request("client/create-identity", { label });
+      return {
+        state: String(result.state),
+        signaturePublicKey: Buffer.from(
+          String(result.signaturePublicKey),
+          "hex",
+        ).toString("base64url"),
+      };
+    },
+    async generateKeyPackage(state: string) {
+      const result = await request("client/generate-key-package", { state });
+      return {
+        state: String(result.state),
+        keyPackage: Buffer.from(String(result.keyPackage), "hex").toString(
+          "base64url",
+        ),
+      };
+    },
+    async joinWelcome(state: string, welcomeBase64Url: string) {
+      const result = await request("client/join-welcome", {
+        state,
+        welcome: Buffer.from(welcomeBase64Url, "base64url").toString("hex"),
+      });
+      return {
+        state: String(result.state),
+        groupId: Buffer.from(String(result.groupId), "hex").toString(
+          "base64url",
+        ),
+      };
+    },
+    async sealApplication(
+      state: string,
+      groupIdBase64Url: string,
+      plaintext: Uint8Array,
+    ) {
+      const result = await request("client/seal-application", {
+        state,
+        groupId: Buffer.from(groupIdBase64Url, "base64url").toString("hex"),
+        plaintext: Buffer.from(plaintext).toString("hex"),
+      });
+      return {
+        state: String(result.state),
+        message: Buffer.from(String(result.message), "hex").toString(
+          "base64url",
+        ),
+      };
+    },
+    async openApplication(
+      state: string,
+      groupIdBase64Url: string,
+      messageBase64Url: string,
+    ) {
+      const result = await request("client/open-application", {
+        state,
+        groupId: Buffer.from(groupIdBase64Url, "base64url").toString("hex"),
+        message: Buffer.from(messageBase64Url, "base64url").toString("hex"),
+      });
+      return {
+        state: String(result.state),
+        plaintext: new Uint8Array(
+          Buffer.from(String(result.plaintext), "hex"),
+        ),
+      };
+    },
+    async processCommit(
+      state: string,
+      groupIdBase64Url: string,
+      commitBase64Url: string,
+    ) {
+      const result = await request("client/process-commit", {
+        state,
+        groupId: Buffer.from(groupIdBase64Url, "base64url").toString("hex"),
+        commit: Buffer.from(commitBase64Url, "base64url").toString("hex"),
+      });
+      return { state: String(result.state) };
     },
     close(): void {
       closed = true;

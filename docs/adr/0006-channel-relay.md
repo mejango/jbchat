@@ -1,6 +1,7 @@
 # ADR 0006 — Two-way channel relay (Telegram / email / WhatsApp)
 
-Status: proposed 2026-08-25. Decides how a conversation participant can
+Status: ratified 2026-08-25 by project owner ("signed off"). Decides how
+a conversation participant can
 read AND answer their end-to-end encrypted chats from an out-of-band
 channel (Telegram first; email and WhatsApp follow the same shape), and
 what that costs in confidentiality. Implementation is sequenced after
@@ -24,12 +25,18 @@ conversation roster. It is never a passive decryption capability, and it
 is never added by default.
 
 1. **Identity.** One relay installation per (account, channel kind),
-   owned by a service account (`platform: 'desktop'`, a dedicated
-   `relay` storage partition class is NOT needed — the roster entry's
-   credential is service-signed and its role is `relay`). Its MLS state
-   lives server-side in the delivery database, sealed with the identity
-   secret, and is driven through the ADR 0004 stdio bridge (the
-   `jbm-mls-bridge` binary already speaks create/join/encrypt/decrypt).
+   owned by a service account (`platform: 'desktop'`). The relay joins
+   with the SAME role as the member it serves (`customer` or
+   `project-staff`) — the role enums are closed in four schema CHECKs
+   plus the 0008 purpose→role matrix, and a distinct `relay` role would
+   buy nothing the roster banner does not already disclose. Its MLS
+   state lives server-side in the delivery database, sealed with the
+   identity secret, and is driven through the ADR 0004 stdio bridge via
+   the `client/*` state-threading verbs (phase 0 below): a snapshot
+   rides in with each request and the mutated snapshot rides back, so
+   the bridge itself stays stateless and never holds group secrets
+   between requests — the ADR 0004 custody boundary is preserved, with
+   custody moving to the sealed DB row rather than into the bridge.
 2. **Consent.** The relay joins a conversation only after the OWNING
    member explicitly enables "Relay to Telegram" for that conversation
    in the UI. Enabling composes a normal membership intent (ADR 0003)
@@ -76,14 +83,45 @@ is never added by default.
 - **Client-relay (the member's own browser forwards)** — no availability
   (browser must be open, at which point the app is usable anyway).
 
-## Sequencing
+## Sequencing (corrected 2026-08-25 after a full subsystem audit)
 
-1. Relay service identity + sealed bridge-backed MLS state store.
-2. Outbound: keeper drain → Telegram sendMessage (member's conversations
-   with relay enabled).
-3. Consent UI + membership-intent wiring + roster banner copy.
-4. Inbound: Telegram webhook reply path with the disambiguation prompt.
-5. Email (Resend inbound) and WhatsApp (provider TBD) reuse 1–4.
+0. **Bridge client verbs — SHIPPED.** `client/create-identity`,
+   `client/generate-key-package`, `client/join-welcome`,
+   `client/seal-application`, `client/open-application`,
+   `client/process-commit` on `jbm-mls-bridge`, state-threading, same
+   snapshot envelope as the wasm client. Proven by a Rust round-trip
+   test (member device on the core, relay purely over the verbs) and
+   the TS bridge lab. Prerequisite discovered: the binary does NOT ship
+   to Railway today (nixpacks is npm-only) — production needs either a
+   nixpacks Rust phase or a release-pinned vendored linux binary whose
+   hash enters the trust manifest (ADR 0004's stated intent).
+1. **Complete the added-member authority path.** The audit found the
+   membership-Add lane creates memberships/welcomes/projections for an
+   added member but NO role_credentials issuer, NO
+   conversation_send_grants row, NO per-member quota bindings, and no
+   HTTP surface for the external-proposal step — so no added member
+   (relay or human) can currently append. Completing this (including
+   policy-head re-issuance selecting the new grant) benefits every Add,
+   not just the relay, and must land with its own storage-lab proofs.
+2. **Relay provisioning + consent lane.** A service provisioner mints
+   the relay installation (installations + device_credentials +
+   KeyPackages need a dedicated service path — enrollment's wallet-proof
+   lane cannot make one), and the consent endpoint mints the Add's
+   eligibility grant. Decision recorded: a new grant capability
+   `channel-relay`, issued ONLY by the consent endpoint under the served
+   member's authenticated session, bound to the relay's service account
+   (requires extending the grants capability CHECK and the intent's
+   admitted-capability list by migration). The intent/commit lane itself
+   is unchanged — the member's device still commits the Add.
+3. **Outbound:** keeper drain (env-gated child, `send-push-wakeups`
+   pattern) — mailbox entries for relay installations → FOR UPDATE on
+   the sealed state row → `client/open-application` → channel send with
+   the relayFormat rendering + `relay_forward_watermarks`.
+4. **Inbound:** Telegram webhook reply path — chat id → verified
+   channel → relay → `routeInbound` (tag / single / prompt) →
+   `client/seal-application` → the ORDINARY append lane under the
+   relay's send grant.
+5. Email (Resend inbound) and WhatsApp (provider TBD) reuse 0–4.
 
 The notification channel (migration 0022) remains verification + wakeup
 only until every item above ships; there is no partial "read-only relay"
