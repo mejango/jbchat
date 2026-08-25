@@ -391,4 +391,4 @@ human sign-off gate.
 - [x] Telegram webhook inbound → routeInbound → seal → appendForInstallation (append lane extracted below the session)
 - [x] Fixed: policyWitnessSync ORDER BY text alias (10 before 9 → equivocation); re-join resets membership window
 - [x] pgtest: drain forwards, replay-safe inbound append, stranger ignored, no echo; storage lab green
-- [ ] check; commit; deploy app+keeper; push
+- [x] check green; commit 301efaa; app+keeper SUCCESS; prod at 26 migrations; drain route 200; pushed
