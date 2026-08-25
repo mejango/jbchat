@@ -551,10 +551,11 @@ export async function seedPostgresDeliveryLab(
  * conversation snapshot its append authority first: the commit re-issues
  * the policy head, rewrites every send grant and appends the target's
  * quota bindings, and the drills that follow expect the fixture graph
- * back exactly. Restore deletes the re-issued head rows (no historical
- * table references them; the immutable policy-transition row may stay -
- * a later re-issue at the same sequence inserts ON CONFLICT DO NOTHING)
- * and puts the anchor, grants and head pointer back.
+ * back exactly. Restore deletes the re-issued policy_heads rows (the
+ * policy log's leaves/checkpoints stay - later checkpoints chain to them;
+ * the immutable policy-transition row stays too - a later re-issue at the
+ * same sequence inserts ON CONFLICT DO NOTHING) and puts the anchor,
+ * grants and head pointer back.
  */
 export interface AppendAuthoritySnapshot {
   readonly conversationId: string;
@@ -601,17 +602,10 @@ export async function restoreAppendAuthorityForTesting(
     WHERE conversation_id = ${conversationId}
       AND policy_head_sequence > ${snapshot.headSequence}`;
   for (const head of heads) {
+    // The global policy log keeps its leaves and checkpoints (later
+    // checkpoints chain to them and nothing references policy_heads from
+    // there); only the per-conversation head rows go.
     const headId = String(head.policy_head_id);
-    const leaves = await tx`
-      SELECT leaf_index FROM policy_log_leaves WHERE policy_head_id = ${headId}`;
-    for (const leaf of leaves) {
-      await tx`
-        DELETE FROM policy_log_checkpoints
-        WHERE tree_size = ${Number(leaf.leaf_index) + 1}
-          AND signer_key_id = 'jbm-policy-log-2026q3'
-          AND witness_key_id = 'jbm-witness-pending'`;
-    }
-    await tx`DELETE FROM policy_log_leaves WHERE policy_head_id = ${headId}`;
     await tx`
       DELETE FROM policy_head_send_grant_set_members
       WHERE policy_head_id = ${headId}`;

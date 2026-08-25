@@ -52,6 +52,9 @@ const DATABASE_URL = process.env.JBM_STORAGE_DATABASE_URL;
 const describeStorage = DATABASE_URL ? describe : describe.skip;
 const NOW = "2026-08-14T16:21:30.000Z";
 const NOW_MS = Date.parse(NOW);
+// The eip155:8453 handlers, their replay guard and the DPoP proofs share
+// this clock so a test can move it together with the lab DB clock.
+let labClockMs = NOW_MS;
 const BASE = "https://api.lab.test";
 const MEDIA_TYPE = "application/vnd.juicebox.messaging.v1+json";
 const POLICY_ID = "00000000-0000-4000-8000-0000000b0001";
@@ -119,7 +122,7 @@ describeStorage("messaging HTTP surface", () => {
       JSON.stringify({
         htm: method,
         htu: normalized.toString(),
-        iat: Math.floor(NOW_MS / 1000),
+        iat: Math.floor(labClockMs / 1000),
         jti: randomUUID(),
         ath: createHash("sha256")
           .update(token ?? device.accessToken, "ascii")
@@ -830,7 +833,7 @@ describeStorage("messaging HTTP surface", () => {
         notifications: null,
       }),
       connect: () => sql,
-      now: () => NOW,
+      now: () => new Date(labClockMs).toISOString(),
       walletProofVerifier: createFictionalWalletProofVerifier({
         finalityProfileId: activeProfileId,
         finalityProfileRevision: activeProfileRevision,
@@ -850,7 +853,7 @@ describeStorage("messaging HTTP surface", () => {
       deliveryKeys: fictionalDeliveryLabKeyPairForTesting(),
       chainRegistry: registry,
       replayGuard: createInProcessDpopReplayGuard({
-        nowEpochMilliseconds: () => NOW_MS,
+        nowEpochMilliseconds: () => labClockMs,
       }),
     });
 
@@ -1587,6 +1590,101 @@ describeStorage("messaging HTTP surface", () => {
       "application",
       "application",
     ]);
+  });
+
+  it("renews an expiring policy head so appends outlive the five-minute window", async () => {
+    const conversationId = activatedConversationId;
+    const [anchorBefore] = await sql`
+      SELECT policy_head_sequence, expires_at
+      FROM delivery_policy_head_anchors
+      WHERE conversation_id = ${conversationId}`;
+    const pastExpiry = new Date(
+      Date.parse(new Date(anchorBefore.expires_at as Date).toISOString()) +
+        60_000,
+    ).toISOString();
+    // The lab clock is the append lane's observedAt: one minute past the
+    // head's expiry every member is refused - the pre-renewal production
+    // behaviour, confirmed rather than assumed.
+    await setDeliveryLabClock(sql, pastExpiry);
+    labClockMs = Date.parse(pastExpiry);
+    try {
+      // (The proof parser refuses the stale head as a 503 before the
+      // admission ladder's policy-head-expired; either way no append.)
+      const stale = await sendVia(customer, conversationId, "past expiry");
+      expect(stale.status).toBe(503);
+
+      // One sync pass renews the head (sequence +1, same grant set) and
+      // cosigns its checkpoint; the lane reopens for every member.
+      const report = await runPolicyWitnessSync(
+        sql,
+        {
+          submitChain: (submission) =>
+            core3.extendChain("policy", {
+              checkpointId: submission.checkpointId,
+              treeSize: submission.treeSize,
+              rootHash: submission.rootHash,
+              previousCheckpointId: submission.previousCheckpointId,
+              signerKeyId: submission.signerKeyId,
+            }),
+        },
+        { provisioningSeed: PROVISIONING_SEED },
+      );
+      expect(report.blocked).toBeNull();
+      expect(report.renewed).toBeGreaterThanOrEqual(1);
+      const [anchorAfter] = await sql`
+        SELECT policy_head_sequence, witness_state, expires_at
+        FROM delivery_policy_head_anchors
+        WHERE conversation_id = ${conversationId}`;
+      expect(String(anchorAfter.policy_head_sequence)).toBe(
+        String(BigInt(String(anchorBefore.policy_head_sequence)) + 1n),
+      );
+      expect(String(anchorAfter.witness_state)).toBe("verified");
+      expect(
+        new Date(anchorAfter.expires_at as Date).toISOString() > pastExpiry,
+      ).toBe(true);
+      const grants = await sql`
+        SELECT policy_head_sequence FROM conversation_send_grants
+        WHERE conversation_id = ${conversationId}`;
+      expect(grants.length).toBe(3);
+      expect(
+        grants.every(
+          (grant) =>
+            String(grant.policy_head_sequence) ===
+            String(anchorAfter.policy_head_sequence),
+        ),
+      ).toBe(true);
+
+      for (const [device, label] of [
+        [customer, "customer"],
+        [projectOwner, "owner"],
+      ] as const) {
+        const sent = await sendVia(device, conversationId, `${label} renewed`);
+        if (sent.status !== 201) {
+          throw new Error(
+            `${label} append refused after renewal: ${JSON.stringify(sent.body)}`,
+          );
+        }
+      }
+      // A second pass inside the fresh window renews nothing.
+      const idle = await runPolicyWitnessSync(
+        sql,
+        {
+          submitChain: (submission) =>
+            core3.extendChain("policy", {
+              checkpointId: submission.checkpointId,
+              treeSize: submission.treeSize,
+              rootHash: submission.rootHash,
+              previousCheckpointId: submission.previousCheckpointId,
+              signerKeyId: submission.signerKeyId,
+            }),
+        },
+        { provisioningSeed: PROVISIONING_SEED },
+      );
+      expect(idle.renewed).toBe(0);
+    } finally {
+      labClockMs = NOW_MS;
+      await setDeliveryLabClock(sql, NOW);
+    }
   });
 
   // Appends against the CURRENT head: the detail read carries the etag and

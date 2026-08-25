@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { Sql } from "postgres";
 import type { ChainExtensionResult } from "./witnessCore";
 import { refreshCustodySnapshotDigest } from "../storage/postgresDeliveryStore";
+import { renewExpiringPolicyHeads } from "./policyHeadRenewal";
 
 export interface PolicyWitnessSubmitPort {
   readonly submitChain: (submission: {
@@ -16,6 +17,8 @@ export interface PolicyWitnessSubmitPort {
 }
 
 export interface PolicyWitnessSyncReport {
+  /** Heads re-issued for freshness before this pass submitted. */
+  readonly renewed: number;
   readonly submitted: number;
   readonly witnessed: number;
   readonly headsVerified: number;
@@ -36,7 +39,17 @@ export interface PolicyWitnessSyncReport {
 export async function runPolicyWitnessSync(
   sql: Sql,
   port: PolicyWitnessSubmitPort,
+  options: { readonly provisioningSeed?: Buffer | null } = {},
 ): Promise<PolicyWitnessSyncReport> {
+  // Freshness renewal first, so the renewed heads' checkpoints are
+  // submitted and cosigned in this same pass.
+  const renewed = options.provisioningSeed
+    ? (
+        await renewExpiringPolicyHeads(sql, {
+          provisioningSeed: options.provisioningSeed,
+        })
+      ).renewed
+    : 0;
   const pending = await sql`
     SELECT checkpoint_id, tree_size::text AS tree_size,
            encode(root_hash, 'base64') AS root_hash, previous_checkpoint_id,
@@ -63,6 +76,7 @@ export async function runPolicyWitnessSync(
     });
     if (result.status !== "witnessed") {
       return Object.freeze({
+        renewed,
         submitted: pending.length,
         witnessed,
         headsVerified,
@@ -114,6 +128,7 @@ export async function runPolicyWitnessSync(
     witnessed += 1;
   }
   return Object.freeze({
+    renewed,
     submitted: pending.length,
     witnessed,
     headsVerified,

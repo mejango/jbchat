@@ -363,4 +363,4 @@ human sign-off gate.
 ### Review
 - consumeCommit never rewrote conversations.etag (latent: any append after a membership Commit failed conversation-state-invalid) — fixed.
 - Unwitnessed head → the proof verifier returns 503, not the 422 policy-head-not-witnessed ladder (pre-existing).
-- Policy heads carry a 5-minute expires_at and nothing refreshes the anchor; lab clocks are frozen so tests never see it. Reported, not fixed.
+- Policy heads carry a 5-minute expires_at and nothing refreshed the anchor — CONFIRMED in the lab (503 on every append past expiry) and FIXED: policyHeadRenewal.ts re-issues expiring heads inside the witness sync tick.

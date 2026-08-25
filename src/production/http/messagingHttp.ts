@@ -1974,6 +1974,7 @@ export function createMessagingHttpHandlers(
       const report = await runPolicyWitnessSync(
         wired.sql,
         wired.policyWitnessSubmit,
+        { provisioningSeed: wired.provisioningSeed },
       );
       return jsonNoStore(200, report);
     },
