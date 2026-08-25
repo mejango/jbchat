@@ -371,4 +371,4 @@ human sign-off gate.
 - [x] mls:bridge:check in npm run check (bytes + Cargo.lock drift)
 - [x] Internal diagnostics mlsBridge field; docs (railway.md, ADR 0006 item 6)
 - [x] JBM_MLS_BRIDGE_BINARY on app + keeper
-- [ ] check green → commit → deploy → verify enrollment-status.mlsBridge ready
+- [x] check green → commit 9929a38 → deploy app+keeper SUCCESS → fruitful.chat enrollment-status.mlsBridge ready (pinned 0a4f0c15…)
