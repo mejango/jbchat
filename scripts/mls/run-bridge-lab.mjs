@@ -33,7 +33,13 @@ const suite = spawnSync(
   ],
   {
     cwd: root,
-    env: { ...process.env, JBM_MLS_BRIDGE_BINARY: binary },
+    // A fresh debug build is not the pinned release; the lab says so
+    // explicitly instead of the client silently trusting it.
+    env: {
+      ...process.env,
+      JBM_MLS_BRIDGE_BINARY: binary,
+      JBM_MLS_BRIDGE_ALLOW_UNPINNED: "1",
+    },
     stdio: ["ignore", "inherit", "inherit"],
   },
 );

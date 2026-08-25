@@ -137,6 +137,20 @@ is never added by default.
    `client/seal-application` → the ORDINARY append lane under the
    relay's send grant.
 5. Email (Resend inbound) and WhatsApp (provider TBD) reuse 0–4.
+6. **Bridge shipping to Railway - SHIPPED.** The bridge ships vendored,
+   exactly as ADR 0004 intended: `npm run mls:bridge:build` builds
+   `bin/mls-bridge/linux-x64/jbm-mls-bridge` (static musl, linux/amd64)
+   inside the pinned `rust:<toolchain>-alpine` image from the locked
+   workspace and writes `bin/mls-bridge/manifest.json` with the binary's
+   SHA-256 and the SHA-256 of `crypto/Cargo.lock` (its SBOM).
+   `npm run mls:bridge:check` (inside `npm run check`) fails when the
+   committed bytes or the lockfile drift from the manifest. At runtime
+   `resolveMlsBridgeFromEnvironment` refuses to spawn any binary whose
+   digest is not in the manifest; only the lab may opt out
+   (`JBM_MLS_BRIDGE_ALLOW_UNPINNED=1`). Both Railway services carry
+   `JBM_MLS_BRIDGE_BINARY=/app/bin/mls-bridge/linux-x64/jbm-mls-bridge`;
+   `POST /v1/internal/enrollment-status` reports `mlsBridge` (resolution
+   + a `bridge/describe` round trip) as the operator's proof.
 
 The notification channel (migration 0022) remains verification + wakeup
 only until every item above ships; there is no partial "read-only relay"

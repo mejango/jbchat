@@ -42,6 +42,17 @@ Operational facts learned during the first deploy:
   is set). NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID and
   JBM_PROVISIONING_SEED are live on the app service; the keeper carries
   JBM_VAPID_PRIVATE_KEY/SUBJECT + JBM_IDENTITY_SECRET for push wakeups.
+- The MLS bridge (ADR 0004/0006) ships VENDORED at
+  `bin/mls-bridge/linux-x64/jbm-mls-bridge` with its hash pinned in
+  `bin/mls-bridge/manifest.json`; set
+  `JBM_MLS_BRIDGE_BINARY=/app/bin/mls-bridge/linux-x64/jbm-mls-bridge`
+  on BOTH services (app: inbound webhook; keeper: outbound drain). The
+  client refuses any binary whose digest is not in the manifest. Rebuild
+  with `npm run mls:bridge:build` (needs Docker Desktop; it copies
+  crypto/ to a temp dir because Docker cannot mount ~/Documents) whenever
+  crypto/ changes - `npm run check` fails until the manifest matches.
+  Verify after deploy: `POST /v1/internal/enrollment-status` (bearer
+  JBM_INTERNAL_SYNC_TOKEN) → `mlsBridge.status === "ready"`.
 - If deploys die repeatedly at "scheduling build on Metal builder", the
   assigned regional builder is stuck: move the service's region
   (GraphQL serviceInstanceUpdate multiRegionConfig) and redeploy.

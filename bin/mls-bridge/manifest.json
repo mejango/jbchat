@@ -1,0 +1,16 @@
+{
+  "kind": "jbm-mls-bridge-release-manifest.v1",
+  "bridgeProtocol": 1,
+  "toolchain": "1.91.0",
+  "image": "rust:1.91.0-alpine",
+  "cargoLockSha256": "2785225bfd567fce91da78ce7906376e4cfe67c3b34478cb5def6384012f2cc8",
+  "artifacts": [
+    {
+      "platform": "linux-x64",
+      "target": "x86_64-unknown-linux-musl",
+      "path": "linux-x64/jbm-mls-bridge",
+      "sha256": "0a4f0c1547752ee363f2da89985dd5be4d816d92c397fd461ef696bd0588efb9",
+      "sizeBytes": 2425632
+    }
+  ]
+}

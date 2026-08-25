@@ -81,6 +81,7 @@ import {
   runPolicyWitnessSync,
   type PolicyWitnessSubmitPort,
 } from "../witness/policyWitnessSync";
+import { resolveMlsBridgeFromEnvironment } from "../mls/bridgeClient";
 import { rotateExternalSenderCredentials } from "../storage/externalSenderRotation";
 import { readCallAtFinalized } from "../chain/quorumReads";
 import { computeKeyPackageRef } from "../identity/identityCrypto";
@@ -2035,6 +2036,7 @@ export function createMessagingHttpHandlers(
           state: String(row.state),
           count: row.c,
         })),
+        mlsBridge: await describeMlsBridge(),
       });
     },
 
@@ -2419,6 +2421,28 @@ function jsonNoStore(status: number, body: unknown): Response {
     status,
     headers: { "Content-Type": MEDIA_TYPE, ...noStoreHeaders() },
   });
+}
+
+// Operator-facing proof that the release-pinned bridge is live: the
+// resolution (absent/refused/ready with the pinned digest) plus one
+// bridge/describe round trip.
+async function describeMlsBridge(): Promise<Record<string, unknown>> {
+  const resolved = resolveMlsBridgeFromEnvironment();
+  if (resolved.status !== "ready") return resolved;
+  const client = resolved.open();
+  try {
+    const description = await client.describe();
+    return {
+      status: "ready",
+      verification: resolved.verification,
+      bridgeProtocol: description.bridgeProtocol,
+      ciphersuite: description.ciphersuite,
+    };
+  } catch (error) {
+    return { status: "unresponsive", reason: String(error) };
+  } finally {
+    client.close();
+  }
 }
 
 function problem(status: number, reasonCode: string): Response {

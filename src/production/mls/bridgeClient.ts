@@ -1,4 +1,8 @@
 import { Buffer } from "node:buffer";
+import {
+  verifyMlsBridgeBinary,
+  type MlsBridgeVerification,
+} from "./bridgeManifest";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable, Writable } from "node:stream";
 import { createInterface } from "node:readline";
@@ -281,11 +285,44 @@ export function createMlsBridgeClient(binaryPath: string): MlsBridgeClient {
   });
 }
 
+export type MlsBridgeResolution =
+  | {
+      readonly status: "ready";
+      readonly binaryPath: string;
+      readonly verification: MlsBridgeVerification;
+      readonly open: () => MlsBridgeClient;
+    }
+  | { readonly status: "absent" }
+  | { readonly status: "refused"; readonly reason: string };
+
 /**
- * Fail-closed environment factory: an unset JBM_MLS_BRIDGE_BINARY means
- * the capability is absent, never a substitute implementation.
+ * Fail-closed environment resolution: an unset JBM_MLS_BRIDGE_BINARY means
+ * the capability is absent, never a substitute implementation; a set one
+ * is spawned only when its bytes are a pinned release in
+ * bin/mls-bridge/manifest.json (or the lab has explicitly allowed an
+ * unpinned build via JBM_MLS_BRIDGE_ALLOW_UNPINNED=1).
  */
-export function mlsBridgeFromEnvironment(): MlsBridgeClient | null {
+export function resolveMlsBridgeFromEnvironment(): MlsBridgeResolution {
   const binaryPath = process.env.JBM_MLS_BRIDGE_BINARY;
-  return binaryPath ? createMlsBridgeClient(binaryPath) : null;
+  if (!binaryPath) return Object.freeze({ status: "absent" as const });
+  const verification = verifyMlsBridgeBinary(binaryPath, {
+    allowUnpinned: process.env.JBM_MLS_BRIDGE_ALLOW_UNPINNED === "1",
+  });
+  if (verification.status === "refused") {
+    return Object.freeze({
+      status: "refused" as const,
+      reason: verification.reason,
+    });
+  }
+  return Object.freeze({
+    status: "ready" as const,
+    binaryPath,
+    verification,
+    open: () => createMlsBridgeClient(binaryPath),
+  });
+}
+
+export function mlsBridgeFromEnvironment(): MlsBridgeClient | null {
+  const resolved = resolveMlsBridgeFromEnvironment();
+  return resolved.status === "ready" ? resolved.open() : null;
 }

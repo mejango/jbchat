@@ -364,3 +364,11 @@ human sign-off gate.
 - consumeCommit never rewrote conversations.etag (latent: any append after a membership Commit failed conversation-state-invalid) — fixed.
 - Unwitnessed head → the proof verifier returns 503, not the 422 policy-head-not-witnessed ladder (pre-existing).
 - Policy heads carry a 5-minute expires_at and nothing refreshed the anchor — CONFIRMED in the lab (503 on every append past expiry) and FIXED: policyHeadRenewal.ts re-issues expiring heads inside the witness sync tick.
+
+## Bridge shipping to Railway (2026-08-25)
+- [x] Reproducible static linux-x64 build script (Docker, pinned toolchain image) → bin/mls-bridge + manifest
+- [x] Manifest verification before spawn (fail closed; lab opt-out only)
+- [x] mls:bridge:check in npm run check (bytes + Cargo.lock drift)
+- [x] Internal diagnostics mlsBridge field; docs (railway.md, ADR 0006 item 6)
+- [x] JBM_MLS_BRIDGE_BINARY on app + keeper
+- [ ] check green → commit → deploy → verify enrollment-status.mlsBridge ready
