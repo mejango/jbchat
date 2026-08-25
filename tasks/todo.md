@@ -382,4 +382,4 @@ human sign-off gate.
 - [x] HTTP: POST/DELETE /v1/conversations/{id}/relay; detail.relay
 - [x] wasm removeMember + mls.ts wrappers + conversation.ts enable/disableRelay + RelayPanel UI
 - [x] pgtests + lab (relay store suite, HTTP consent enable/disable); docs/ADR
-- [ ] check; deploy; memory
+- [x] check green; commit 8d62578; app+keeper SUCCESS; prod at 25 migrations; mlsBridge ready; memory updated
