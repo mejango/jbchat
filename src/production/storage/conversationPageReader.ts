@@ -17,6 +17,7 @@ export interface ConversationPageEvent {
   readonly contentType: string;
   readonly envelopeBytes: string;
   readonly headHash: string;
+  readonly receivedAt: string;
 }
 
 export interface ConversationPageSnapshot {
@@ -125,7 +126,8 @@ export function createConversationPageReader(context: {
       const ceiling = removedCap === null ? 9223372036854775807n : removedCap;
       const candidates = await sql`
         SELECT position, envelope_id, envelope_class, content_type,
-               octet_length(envelope_bytes) AS envelope_byte_length, head_hash
+               octet_length(envelope_bytes) AS envelope_byte_length, head_hash,
+               received_at
         FROM envelopes
         WHERE conversation_id = ${input.conversationId}
           AND position > ${String(anchor)}
@@ -156,6 +158,7 @@ export function createConversationPageReader(context: {
             headHash: Buffer.from(row.head_hash as Uint8Array).toString(
               "base64url",
             ),
+            receivedAt: new Date(row.received_at as Date).toISOString(),
           }),
         );
       }

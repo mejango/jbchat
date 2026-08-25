@@ -281,7 +281,12 @@ export function createConversationPlanStore(
     const effectiveCurrentId = adoptedByGeneration.get(1) ?? currentSenderId;
     const effectiveStagedId = adoptedByGeneration.get(2) ?? stagedSenderId;
 
-    const signingKeyId = `jbm-policy-head-${projectRefId.slice(0, 8)}`;
+    // The FULL project ref keeps the key id globally unique — an 8-char
+    // prefix collides across projects sharing a uuid prefix, and the
+    // second project would silently adopt the first's key via the
+    // ON CONFLICT DO NOTHING below. Already-provisioned projects keep
+    // their stored id: issuance reads it from the provision row.
+    const signingKeyId = `jbm-policy-head-${projectRefId}`;
     const headKeys = ed25519(deriveSeed("policy-head-signer", projectRefId));
     await tx`
       INSERT INTO policy_head_signing_keys (
@@ -315,10 +320,16 @@ export function createConversationPlanStore(
     return rows[0];
   };
 
-  const policyHeadSignerFor = (projectRefId: string): PolicyHeadSignerPort => {
+  // The signer id comes from the PROVISION row, never recomputed — an
+  // already-provisioned project keeps whatever id it was provisioned
+  // under (the pre-fix 8-char form included).
+  const policyHeadSignerFor = (
+    projectRefId: string,
+    signerKeyId: string,
+  ): PolicyHeadSignerPort => {
     const keys = ed25519(deriveSeed("policy-head-signer", projectRefId));
     return Object.freeze({
-      signerKeyId: `jbm-policy-head-${projectRefId.slice(0, 8)}`,
+      signerKeyId,
       sign: (digest: Buffer) => signNode(null, digest, keys.privateKey),
     });
   };
@@ -535,13 +546,16 @@ export function createConversationPlanStore(
   };
 
   // Reserve one available KeyPackage per installation (the irreversible
-  // take is committed later in materializePlan). Returns null if any
-  // installation has none.
+  // take is committed later in materializePlan). Best-effort per
+  // installation: an id with no available package is simply absent from
+  // the map, and the CALLER decides how many welcomes it needs — one
+  // stale device with an empty shelf must never block a chat for the
+  // devices that do have keys.
   const reserveKeyPackages = async (
     tx: TransactionSql,
     now: string,
     installationIds: readonly string[],
-  ): Promise<Map<string, { ref: string; bytes: string }> | null> => {
+  ): Promise<Map<string, { ref: string; bytes: string }>> => {
     const out = new Map<string, { ref: string; bytes: string }>();
     for (const installationId of installationIds) {
       const taken = await tx`
@@ -554,7 +568,7 @@ export function createConversationPlanStore(
         ORDER BY created_at
         LIMIT 1
         FOR UPDATE SKIP LOCKED`;
-      if (taken.length !== 1) return null;
+      if (taken.length !== 1) continue;
       out.set(installationId, {
         ref: b64ToUrl(taken[0].ref),
         bytes: b64ToUrl(taken[0].bytes),
@@ -642,7 +656,7 @@ export function createConversationPlanStore(
           WHERE r.project_ref_id = ${projectRefId} AND r.state = 'active'
             AND i.status = 'active'
           ORDER BY r.registered_at
-          LIMIT 3`;
+          LIMIT 8`;
         if (staff.length === 0) {
           return Object.freeze({
             status: "refused" as const,
@@ -650,12 +664,17 @@ export function createConversationPlanStore(
           });
         }
 
+        // Welcome every staff device that has a KeyPackage; refuse only if
+        // none does — a stale device must not block the reachable ones.
         const reserved = await reserveKeyPackages(
           tx,
           now,
           staff.map((member) => String(member.installation_id)),
         );
-        if (!reserved) {
+        const reachableStaff = staff.filter((member) =>
+          reserved.has(String(member.installation_id)),
+        );
+        if (reachableStaff.length === 0) {
           return Object.freeze({
             status: "refused" as const,
             reasonCode: "recipient_keys_unavailable",
@@ -670,7 +689,7 @@ export function createConversationPlanStore(
             role: "customer",
             credentialFingerprint: b64ToUrl(creator[0].fingerprint),
           },
-          welcomeMembers: staff.map((member) => ({
+          welcomeMembers: reachableStaff.map((member) => ({
             accountId: String(member.account_id),
             installationId: String(member.installation_id),
             role: "project-staff",
@@ -760,12 +779,21 @@ export function createConversationPlanStore(
           });
         }
 
-        const customer = await tx`
-          SELECT encode(mls_credential_fingerprint, 'base64') AS fingerprint
+        // ALL of the customer's active devices, requester first, so every
+        // browser they enrolled can decrypt the conversation from birth.
+        const customerDevices = await tx`
+          SELECT installation_id,
+                 encode(mls_credential_fingerprint, 'base64') AS fingerprint
           FROM installations
-          WHERE installation_id = ${customerInstallationId}
-            AND account_id = ${customerAccountId} AND status = 'active'`;
-        if (customer.length !== 1) {
+          WHERE account_id = ${customerAccountId} AND status = 'active'
+          ORDER BY (installation_id = ${customerInstallationId}) DESC,
+                   created_at`;
+        if (
+          !customerDevices.some(
+            (device) =>
+              String(device.installation_id) === customerInstallationId,
+          )
+        ) {
           return Object.freeze({
             status: "refused" as const,
             reasonCode: "requester_not_active",
@@ -790,10 +818,17 @@ export function createConversationPlanStore(
           });
         }
 
-        const reserved = await reserveKeyPackages(tx, now, [
-          customerInstallationId,
-        ]);
-        if (!reserved) {
+        // Welcome every customer device that has a KeyPackage; refuse only
+        // if none does.
+        const reserved = await reserveKeyPackages(
+          tx,
+          now,
+          customerDevices.map((device) => String(device.installation_id)),
+        );
+        const reachableDevices = customerDevices.filter((device) =>
+          reserved.has(String(device.installation_id)),
+        );
+        if (reachableDevices.length === 0) {
           return Object.freeze({
             status: "refused" as const,
             reasonCode: "recipient_keys_unavailable",
@@ -808,16 +843,14 @@ export function createConversationPlanStore(
             role: "project-staff",
             credentialFingerprint: b64ToUrl(owner[0].fingerprint),
           },
-          welcomeMembers: [
-            {
-              accountId: customerAccountId,
-              installationId: customerInstallationId,
-              role: "customer",
-              credentialFingerprint: b64ToUrl(customer[0].fingerprint),
-              keyPackageRef: reserved.get(customerInstallationId)!.ref,
-              keyPackage: reserved.get(customerInstallationId)!.bytes,
-            },
-          ],
+          welcomeMembers: reachableDevices.map((device) => ({
+            accountId: customerAccountId,
+            installationId: String(device.installation_id),
+            role: "customer",
+            credentialFingerprint: b64ToUrl(String(device.fingerprint)),
+            keyPackageRef: reserved.get(String(device.installation_id))!.ref,
+            keyPackage: reserved.get(String(device.installation_id))!.bytes,
+          })),
           existingRelationship:
             relationships.length === 1
               ? {
@@ -963,6 +996,18 @@ export function createConversationPlanStore(
                 binding.scope === "installation" || binding.scope === "account",
             ),
           );
+        // Two devices on one account (multi-device welcome) produce the
+        // SAME account-scope binding; they must share one row, not insert
+        // two. Dedupe by scope identity, first occurrence wins.
+        const seenBindingKeys = new Set<string>();
+        const allBindings = [...quotaBindings, ...memberScopedBindings].filter(
+          (binding) => {
+            const key = `${binding.scope}:${binding.scopeHash}:${binding.quotaName}`;
+            if (seenBindingKeys.has(key)) return false;
+            seenBindingKeys.add(key);
+            return true;
+          },
+        );
         const rosterProjection = rosterCanonical.map((member) => ({
           conversationId,
           conversationGeneration: generation,
@@ -1057,7 +1102,7 @@ export function createConversationPlanStore(
             0, ${Buffer.from(recipientSetHash, "base64url")}
           )`;
 
-        for (const binding of [...quotaBindings, ...memberScopedBindings]) {
+        for (const binding of allBindings) {
           await tx`
             INSERT INTO quota_scopes (
               scope_type, scope_hash, realm_id, subject_id, created_at
@@ -1084,10 +1129,7 @@ export function createConversationPlanStore(
             ${plan.quota_policy_digest as Buffer},
             ${JSON.stringify(quotaBindings)}::jsonb, ${now}::timestamptz
           ) ON CONFLICT DO NOTHING`;
-        for (const [ordinal, binding] of [
-          ...quotaBindings,
-          ...memberScopedBindings,
-        ].entries()) {
+        for (const [ordinal, binding] of allBindings.entries()) {
           await tx`
             INSERT INTO conversation_quota_bindings (
               conversation_id, quota_policy_digest, scope_type, scope_hash,
@@ -1172,7 +1214,10 @@ export function createConversationPlanStore(
         // Issued signed policy head + its append-lane anchor.
         const issuance = createPolicyHeadIssuanceStore({
           sql: tx as unknown as Sql,
-          signer: policyHeadSignerFor(projectRefId),
+          signer: policyHeadSignerFor(
+            projectRefId,
+            String(provision.policy_head_signing_key_id),
+          ),
         });
         const currentSender = await tx`
           SELECT encode(credential_fingerprint, 'base64') AS fp,

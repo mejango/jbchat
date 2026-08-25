@@ -173,6 +173,8 @@
   padding: 0;
   max-width: 26rem;
   width: calc(100vw - 2rem);
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
   background: var(--mx-white);
   color: var(--mx-ink);
 }
@@ -224,5 +226,23 @@
 @media (prefers-reduced-motion: reduce) {
   .mxBtnPrimary:active {
     transform: none;
+  }
+}
+
+/* Small screens: tighter chrome, wrappable action rows, edge-to-edge
+   dialogs. Message bubbles and cards already size fluidly. */
+@media (max-width: 600px) {
+  .mxShell {
+    padding: 1rem 0.875rem 3rem;
+  }
+  .mxHeader {
+    padding: 0.75rem 0.875rem;
+  }
+  .mxRow {
+    flex-wrap: wrap;
+  }
+  .mxDialog {
+    width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
   }
 }

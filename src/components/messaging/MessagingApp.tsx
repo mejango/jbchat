@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useAccount, useSignMessage } from "wagmi";
 import { MessagingProviders } from "@/providers/MessagingProviders";
 import {
@@ -19,6 +19,7 @@ import {
   type CachedMessage,
 } from "@/lib/messaging/conversation";
 import { NotificationsButton } from "./NotificationsPanel";
+import { DevicesButton } from "./DevicesPanel";
 import { truncateAddress } from "@/lib/messaging/identity";
 import {
   Avatar,
@@ -44,6 +45,33 @@ interface ConversationEvent {
   envelopeClass: string;
   contentType: string;
   envelopeBytes: string;
+  receivedAt?: string;
+}
+
+function dayLabel(iso: string): string {
+  const date = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate();
+  if (sameDay(date, today)) return "Today";
+  if (sameDay(date, yesterday)) return "Yesterday";
+  return date.toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+    year:
+      date.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  });
+}
+
+function timeLabel(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function relativeTime(iso: string): string {
@@ -274,9 +302,14 @@ function Inbox() {
   }, [reload]);
 
   if (selected) {
+    const selectedMeta =
+      meta[
+        `${projectKey(selected.project.chainId)}:${selected.project.projectId}`
+      ];
     return (
       <ConversationView
         conversation={selected}
+        projectName={selectedMeta?.name ?? null}
         onBack={() => {
           setSelected(null);
           void reload();
@@ -292,6 +325,7 @@ function Inbox() {
           Messages
         </h1>
         <div className="mxRow">
+          <DevicesButton />
           <NotificationsButton />
         </div>
       </div>
@@ -451,7 +485,9 @@ function RequestRow({
   request: OwnerRequest;
   onAccepted: () => void;
 }) {
-  const [state, setState] = useState<"idle" | "working" | "error">("idle");
+  const [state, setState] = useState<
+    "idle" | "working" | "declining" | "error"
+  >("idle");
 
   const accept = async () => {
     setState("working");
@@ -463,6 +499,15 @@ function RequestRow({
     } catch {
       setState("error");
     }
+  };
+
+  const decline = async () => {
+    setState("declining");
+    const response = await api("POST", "/v1/conversation-requests/decline", {
+      requestId: request.requestId,
+    }).catch(() => null);
+    if (response?.ok) onAccepted();
+    else setState("error");
   };
 
   return (
@@ -481,8 +526,15 @@ function RequestRow({
         </div>
       </div>
       <button
+        className="mxBtnSecondary"
+        disabled={state === "working" || state === "declining"}
+        onClick={() => void decline()}
+      >
+        {state === "declining" ? "Declining…" : "Decline"}
+      </button>
+      <button
         className="mxBtnPrimary"
-        disabled={state === "working"}
+        disabled={state === "working" || state === "declining"}
         onClick={() => void accept()}
       >
         {state === "working"
@@ -727,9 +779,11 @@ function Discovery() {
 
 function ConversationView({
   conversation,
+  projectName,
   onBack,
 }: {
   conversation: ConversationSummary;
+  projectName: string | null;
   onBack: () => void;
 }) {
   const [events, setEvents] = useState<ConversationEvent[] | null>(null);
@@ -800,7 +854,8 @@ function ConversationView({
           ← Inbox
         </button>
         <h1 className="mxDisplay" style={{ margin: 0, fontSize: 18 }}>
-          Project #{conversation.project.projectId} support
+          {projectName ?? `Project #${conversation.project.projectId}`}
+          {conversation.role === "customer" ? " support" : ""}
         </h1>
       </div>
       <section
@@ -812,42 +867,76 @@ function ConversationView({
           <p className="mxHint">Loading transcript…</p>
         ) : (
           <ol style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 8 }}>
-            {events.map((event) => {
+            {events.map((event, index) => {
+              const previous = index > 0 ? events[index - 1] : null;
+              const separator =
+                event.receivedAt &&
+                (!previous?.receivedAt ||
+                  dayLabel(previous.receivedAt) !== dayLabel(event.receivedAt)) ? (
+                  <li
+                    key={`day-${event.position}`}
+                    className="mxHint"
+                    style={{ textAlign: "center", padding: "0.25rem 0" }}
+                  >
+                    {dayLabel(event.receivedAt)}
+                  </li>
+                ) : null;
               if (event.envelopeClass !== "application") {
                 return (
-                  <li key={event.position} className="mxHint" style={{ textAlign: "center" }}>
-                    Membership change · #{event.position}
-                  </li>
+                  <Fragment key={event.position}>
+                    {separator}
+                    <li className="mxHint" style={{ textAlign: "center" }}>
+                      {event.position === "1"
+                        ? "Chat opened — end-to-end encrypted"
+                        : "Membership updated"}
+                    </li>
+                  </Fragment>
                 );
               }
               const message = messages[event.envelopeId];
               const mine = message?.mine ?? false;
               return (
-                <li
-                  key={event.position}
-                  style={{
-                    display: "flex",
-                    justifyContent: mine ? "flex-end" : "flex-start",
-                  }}
-                >
-                  <span
+                <Fragment key={event.position}>
+                  {separator}
+                  <li
                     style={{
-                      maxWidth: "75%",
-                      padding: "0.5rem 0.75rem",
-                      borderRadius: 12,
-                      background: mine ? "var(--mx-bluebs)" : "var(--mx-smoke-100)",
-                      color: mine ? "white" : "inherit",
-                      whiteSpace: "pre-wrap",
-                      overflowWrap: "anywhere",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: mine ? "flex-end" : "flex-start",
                     }}
                   >
-                    {message && message.text !== ""
-                      ? message.text
-                      : decryptable
-                        ? "Encrypted message"
-                        : "Encrypted on another device"}
-                  </span>
-                </li>
+                    <span
+                      title={
+                        event.receivedAt
+                          ? new Date(event.receivedAt).toLocaleString()
+                          : undefined
+                      }
+                      style={{
+                        maxWidth: "75%",
+                        padding: "0.5rem 0.75rem",
+                        borderRadius: 12,
+                        background: mine ? "var(--mx-bluebs)" : "var(--mx-smoke-100)",
+                        color: mine ? "white" : "inherit",
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {message && message.text !== ""
+                        ? message.text
+                        : decryptable
+                          ? "Encrypted message"
+                          : "Encrypted on another device"}
+                    </span>
+                    {event.receivedAt ? (
+                      <span
+                        className="mxHint"
+                        style={{ fontSize: 11, padding: "0.1rem 0.25rem" }}
+                      >
+                        {timeLabel(event.receivedAt)}
+                      </span>
+                    ) : null}
+                  </li>
+                </Fragment>
               );
             })}
           </ol>

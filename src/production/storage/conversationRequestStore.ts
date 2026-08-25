@@ -44,6 +44,19 @@ export interface ConversationRequestStore {
   readonly listForOwnerInstallation: (
     installationId: string,
   ) => Promise<readonly OwnerQueueItem[]>;
+  /**
+   * Owner declines a pending request. The requester's pending slot frees
+   * up (the one-pending partial index only covers status='pending'), so
+   * they may request again later.
+   */
+  readonly declineRequest: (input: {
+    requestId: string;
+    ownerAccountId: string;
+    ownerInstallationId: string;
+  }) => Promise<
+    | { readonly status: "declined" }
+    | { readonly status: "refused"; readonly reasonCode: string }
+  >;
 }
 
 export function createConversationRequestStore(
@@ -187,6 +200,47 @@ export function createConversationRequestStore(
           row.requester_wallet === null ? null : String(row.requester_wallet),
         createdAt: new Date(row.created_at as Date).toISOString(),
       }));
+    },
+
+    async declineRequest(input: {
+      requestId: string;
+      ownerAccountId: string;
+      ownerInstallationId: string;
+    }): Promise<
+      | { readonly status: "declined" }
+      | { readonly status: "refused"; readonly reasonCode: string }
+    > {
+      const now = context.now();
+      return sql.begin(async (tx) => {
+        const requests = await tx`
+          SELECT project_ref_id, status FROM conversation_requests
+          WHERE request_id = ${input.requestId}
+          FOR UPDATE`;
+        if (requests.length !== 1 || String(requests[0].status) !== "pending") {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "request_not_pending",
+          });
+        }
+        const staff = await tx`
+          SELECT 1 FROM project_staff_registrations
+          WHERE project_ref_id = ${String(requests[0].project_ref_id)}
+            AND installation_id = ${input.ownerInstallationId}
+            AND account_id = ${input.ownerAccountId}
+            AND state = 'active'`;
+        if (staff.length !== 1) {
+          return Object.freeze({
+            status: "refused" as const,
+            reasonCode: "not_project_staff",
+          });
+        }
+        await tx`
+          UPDATE conversation_requests
+          SET status = 'declined', resolved_at = ${now}::timestamptz,
+              resolved_by_installation_id = ${input.ownerInstallationId}
+          WHERE request_id = ${input.requestId}`;
+        return Object.freeze({ status: "declined" as const });
+      });
     },
   });
 }

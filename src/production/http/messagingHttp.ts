@@ -168,6 +168,12 @@ export interface MessagingHttpHandlers {
   readonly createConversationRequest: (request: Request) => Promise<Response>;
   readonly listConversationRequests: (request: Request) => Promise<Response>;
   readonly acceptConversationRequest: (request: Request) => Promise<Response>;
+  readonly declineConversationRequest: (request: Request) => Promise<Response>;
+  readonly listInstallations: (request: Request) => Promise<Response>;
+  readonly revokeInstallation: (
+    request: Request,
+    installationId: string,
+  ) => Promise<Response>;
   readonly createNotificationChannel: (request: Request) => Promise<Response>;
   readonly verifyNotificationChannel: (request: Request) => Promise<Response>;
   readonly listNotificationChannels: (request: Request) => Promise<Response>;
@@ -1113,6 +1119,106 @@ export function createMessagingHttpHandlers(
         session.installationId,
       );
       return jsonNoStore(200, { requests: items });
+    },
+
+    async declineConversationRequest(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const body = await readBody(request, MAX_BODY_BYTES);
+      if (body === undefined) return problem(400, "malformed_request");
+      const requestId = (body as Record<string, unknown>).requestId;
+      if (typeof requestId !== "string" || !UUID_PATTERN.test(requestId)) {
+        return problem(400, "malformed_request");
+      }
+      const result = await wired.requests.declineRequest({
+        requestId,
+        ownerAccountId: session.accountId,
+        ownerInstallationId: session.installationId,
+      });
+      if (result.status === "refused") {
+        return problem(
+          result.reasonCode === "request_not_pending" ? 404 : 403,
+          result.reasonCode,
+        );
+      }
+      return jsonNoStore(200, { status: "declined" });
+    },
+
+    async listInstallations(request: Request): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "GET") return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      const rows = await wired.sql`
+        SELECT installation_id, platform, status, created_at, last_seen_at
+        FROM installations
+        WHERE account_id = ${session.accountId}
+          AND status IN ('active', 'suspended')
+        ORDER BY created_at`;
+      return jsonNoStore(200, {
+        installations: rows.map((row) => ({
+          installationId: String(row.installation_id),
+          platform: String(row.platform),
+          status: String(row.status),
+          createdAt: new Date(row.created_at as Date).toISOString(),
+          lastSeenAt: new Date(row.last_seen_at as Date).toISOString(),
+          current: String(row.installation_id) === session.installationId,
+        })),
+      });
+    },
+
+    async revokeInstallation(
+      request: Request,
+      installationId: string,
+    ): Promise<Response> {
+      const wired = wire();
+      if (!wired || request.method !== "POST") return notFound();
+      if (!UUID_PATTERN.test(installationId)) return notFound();
+      const session = await authenticate(wired, request);
+      if (!session) return problem(401, "session_invalid");
+      // A device cannot revoke itself — sign out covers that; requiring a
+      // SECOND device to do the revoking keeps a stolen device from
+      // locking the owner out of their own account.
+      if (installationId === session.installationId) {
+        return problem(409, "cannot_revoke_current_device");
+      }
+      const nowIso = now();
+      const revoked = await wired.sql.begin(async (tx) => {
+        const target = await tx`
+          UPDATE installations
+          SET status = 'revoked', revoked_at = ${nowIso}::timestamptz
+          WHERE installation_id = ${installationId}
+            AND account_id = ${session.accountId}
+            AND status IN ('active', 'suspended')
+          RETURNING installation_id`;
+        if (target.length !== 1) return false;
+        // Credentials and sessions die with the device: the auth path
+        // re-checks credential status on every call, so this is a full
+        // lock-out. The device's MLS seats in existing conversations are
+        // left to the roster-removal flow; it can no longer fetch anything.
+        await tx`
+          UPDATE device_credentials
+          SET status = 'revoked', revoked_at = ${nowIso}::timestamptz
+          WHERE installation_id = ${installationId} AND status = 'active'`;
+        await tx`
+          UPDATE auth_sessions
+          SET state = 'revoked', revoked_at = ${nowIso}::timestamptz,
+              revoke_reason = 'device_revoked'
+          WHERE installation_id = ${installationId} AND state = 'active'`;
+        // Unclaimed KeyPackages are destroyed so no future plan can
+        // welcome the revoked device.
+        await tx`
+          UPDATE key_packages
+          SET state = 'revoked', package_bytes = NULL,
+              destroyed_at = ${nowIso}::timestamptz,
+              revoked_at = ${nowIso}::timestamptz
+          WHERE installation_id = ${installationId} AND state = 'available'`;
+        return true;
+      });
+      if (!revoked) return notFound();
+      return jsonNoStore(200, { status: "revoked", installationId });
     },
 
     async createNotificationChannel(request: Request): Promise<Response> {

@@ -3,7 +3,7 @@ import type { MetadataRoute } from "next";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "Fruitful",
-    short_name: "JB Messages",
+    short_name: "Fruitful",
     description: "Private purchase support and project community messaging.",
     start_url: "/",
     display: "standalone",
